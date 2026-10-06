@@ -17,6 +17,8 @@ not retrieve SEC filing documents.
 
 - `src/app.py`: Streamlit app entry point.
 - `src/analysis.py`: Shared Yahoo Finance data functions.
+- `assets/nimbus-logo-icon.png`: Square logo used for the browser tab icon.
+- `assets/nimbus-logo-wide.png`: Wide logo used in the main dashboard heading.
 - `src/features/`: Future one-file-per-feature modules; see its README.
 - `filings.ipynb`, `news.ipynb`, `stock_price_ratings.ipynb`: Exploratory notebooks.
 
