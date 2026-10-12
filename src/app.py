@@ -267,14 +267,14 @@ if run_analysis:
 st.markdown('<div class="or-divider">— OR —</div>', unsafe_allow_html=True)
 st.markdown('<div class="compare-title">Compare two companies</div>', unsafe_allow_html=True)
 compare_left, compare_center, compare_right = st.columns([1, 2, 1])
+
 with compare_center:
-    if st.button("Compare Companies →"):
+    if st.button("Compare Companies →", key="open_comparison"):
         st.session_state["show_comparison"] = (
             not st.session_state.get("show_comparison", False)
         )
 
 if st.session_state.get("show_comparison", False):
-    st.divider()
     show_company_comparison()
 
 st.markdown('<div class="header-rule"></div>', unsafe_allow_html=True)
