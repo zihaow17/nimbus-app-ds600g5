@@ -1,5 +1,6 @@
 """Nimbus two-company comparison page. Run through src/app.py or this file directly."""
 from datetime import datetime, timezone
+from pathlib import Path
 from html import escape
 import math
 
@@ -7,6 +8,22 @@ import pandas as pd
 import streamlit as st
 import yfinance as yf
 
+
+PROJECT_ROOT = Path(__file__).resolve().parents[2]
+LOGO_DIR = PROJECT_ROOT / "assets" / "company_logos"
+
+# Public brand icons. Add a local PNG under assets/company_logos/TICKER.png
+# if you prefer to supply a logo yourself.
+LOGO_URLS = {
+    "AAPL": "https://cdn.simpleicons.org/apple/FFFFFF",
+    "MSFT": "https://cdn.simpleicons.org/microsoft/5EBAA7",
+    "GOOGL": "https://cdn.simpleicons.org/google/4285F4",
+    "GOOG": "https://cdn.simpleicons.org/google/4285F4",
+    "AMZN": "https://cdn.simpleicons.org/amazon/FF9900",
+    "NVDA": "https://cdn.simpleicons.org/nvidia/76B900",
+    "TSLA": "https://cdn.simpleicons.org/tesla/E82127",
+    "META": "https://cdn.simpleicons.org/meta/0866FF",
+}
 
 CSS = """
 <style>
@@ -16,6 +33,7 @@ CSS = """
 .nimbus-kicker {font-size:.75rem;color:#7a9ccc;letter-spacing:.16em;font-weight:700;}
 .nimbus-company {display:flex;gap:13px;align-items:center;margin-bottom:10px;}
 .nimbus-mark {width:47px;height:47px;border-radius:14px;display:flex;align-items:center;justify-content:center;font-weight:800;color:#fff;font-size:1.05rem;background:linear-gradient(135deg,#223c64,#225da3);border:1px solid #405a79;}
+.nimbus-logo {width:47px;height:47px;border-radius:12px;object-fit:contain;background:#1a293d;padding:7px;border:1px solid #405a79;}
 .nimbus-name {font-size:1.08rem;font-weight:740;line-height:1.35;}
 .nimbus-symbol {font-size:.77rem;color:#91a5ba;}
 .nimbus-section {font-size:1.15rem;font-weight:750;margin:.45rem 0 1rem;}
@@ -66,32 +84,24 @@ def company_history(ticker, period):
     return result[["Close"]].dropna() if isinstance(result, pd.DataFrame) and "Close" in result else pd.DataFrame()
 
 
-@st.cache_data(ttl=900, show_spinner=False)
-def company_news(ticker):
-    raw = yf.Ticker(ticker).news or []
-    items = []
-    for article in raw[:5]:
-        c = article.get("content") or {}
-        title = c.get("title") or article.get("title")
-        provider = (c.get("provider") or {}).get("displayName") if isinstance(c.get("provider"), dict) else article.get("publisher")
-        link = (c.get("canonicalUrl") or {}).get("url") if isinstance(c.get("canonicalUrl"), dict) else article.get("link")
-        if title:
-            items.append((str(title), str(provider or "News"), link))
-    return items
-
-
-@st.cache_data(ttl=900, show_spinner=False)
-def company_statements(ticker):
-    stock = yf.Ticker(ticker)
-    return {"Income statement": stock.income_stmt, "Balance sheet": stock.balance_sheet, "Cash flow": stock.cashflow}
+def _company_logo(ticker):
+    """Return a small company logo, with initials if no logo is available."""
+    local = LOGO_DIR / f"{ticker}.png"
+    if local.is_file():
+        import base64
+        encoded = base64.b64encode(local.read_bytes()).decode("ascii")
+        return f'<img class="nimbus-logo" src="data:image/png;base64,{encoded}" alt="{escape(ticker)} logo">'
+    if ticker in LOGO_URLS:
+        return (f'<img class="nimbus-logo" src="{LOGO_URLS[ticker]}" '
+                f'alt="{escape(ticker)} logo">')
+    return f'<div class="nimbus-mark">{escape(ticker[:2])}</div>'
 
 
 def _profile(ticker, info, period):
     name = escape(str(info.get("shortName") or info.get("longName") or ticker))
     currency = str(info.get("currency") or "USD")
-    mark = escape(ticker[:2])
     with st.container(border=True):
-        st.markdown(f'<div class="nimbus-company"><div class="nimbus-mark">{mark}</div><div><div class="nimbus-name">{name}</div><div class="nimbus-symbol">{escape(ticker)} · {escape(str(info.get("exchange") or "Listed company"))}</div></div></div>', unsafe_allow_html=True)
+        st.markdown(f'<div class="nimbus-company">{_company_logo(ticker)}<div><div class="nimbus-name">{name}</div><div class="nimbus-symbol">{escape(ticker)} · {escape(str(info.get("exchange") or "Listed company"))}</div></div></div>', unsafe_allow_html=True)
         price = info.get("currentPrice") or info.get("regularMarketPrice")
         previous = info.get("previousClose") or info.get("regularMarketPreviousClose")
         change = ((price / previous) - 1) * 100 if isinstance(price, (int, float)) and isinstance(previous, (int, float)) and previous else None
@@ -110,6 +120,18 @@ def _profile(ticker, info, period):
             st.metric("EPS (TTM)", _number(info.get("trailingEps"), prefix=f"{currency} "))
 
 
+def _dividend_yield(info):
+    """Yahoo Finance dividendYield is generally already expressed in percent points.
+
+    trailingAnnualDividendYield is normally a decimal fraction, so normalize it.
+    """
+    value = info.get("dividendYield")
+    if isinstance(value, (int, float)) and math.isfinite(value):
+        return _number(value, suffix="%")
+    trailing = info.get("trailingAnnualDividendYield")
+    return _percent(trailing)
+
+
 def _comparison(t1, i1, t2, i2):
     c1 = str(i1.get("currency") or "USD")
     c2 = str(i2.get("currency") or "USD")
@@ -124,69 +146,25 @@ def _comparison(t1, i1, t2, i2):
         ("Operating margin", "operatingMargins", lambda v, c: _percent(v)),
         ("Profit margin", "profitMargins", lambda v, c: _percent(v)),
         ("Return on equity", "returnOnEquity", lambda v, c: _percent(v)),
-        ("Dividend yield", "dividendYield", lambda v, c: _percent(v)),
+
     ]
     result = []
     for label, key, format_fn in rows:
         result.append({"Metric": label, t1: format_fn(i1.get(key), c1), t2: format_fn(i2.get(key), c2)})
-    st.dataframe(pd.DataFrame(result), hide_index=True, use_container_width=True, height=425)
+    result.append({"Metric": "Dividend yield", t1: _dividend_yield(i1), t2: _dividend_yield(i2)})
+    st.dataframe(
+        pd.DataFrame(result),
+        hide_index=True,
+        use_container_width=True,
+        height=460,
+        column_config={
+            "Metric": st.column_config.TextColumn("Metric", width="medium"),
+            t1: st.column_config.TextColumn(t1, width="medium"),
+            t2: st.column_config.TextColumn(t2, width="medium"),
+        },
+    )
     if c1 != c2:
         st.warning(f"Currencies differ ({c1} versus {c2}); values are not FX-converted.")
-
-
-def _analysts(ticker, info):
-    score = info.get("recommendationMean")
-    label = info.get("recommendationKey")
-    analyst_count = info.get("numberOfAnalystOpinions")
-    with st.container(border=True):
-        st.markdown('<div class="nimbus-section">Analyst ratings</div>', unsafe_allow_html=True)
-        st.caption(f"{ticker} · Yahoo Finance analyst consensus")
-        if label:
-            st.metric("Recommendation", str(label).replace("_", " ").title())
-        else:
-            st.info("Analyst recommendation is unavailable.")
-        c1, c2 = st.columns(2)
-        c1.metric("Consensus score", _number(score))
-        c2.metric("Analyst opinions", str(analyst_count) if analyst_count is not None else "N/A")
-        st.caption("Yahoo recommendation scores typically range from 1 (strong buy) to 5 (sell). Availability varies.")
-
-
-def _statement_panel(ticker):
-    with st.container(border=True):
-        st.markdown('<div class="nimbus-section">Financial statements</div>', unsafe_allow_html=True)
-        with st.spinner("Loading financial statements..."):
-            try:
-                statements = company_statements(ticker)
-            except Exception as exc:
-                st.info(f"Statements unavailable: {exc}")
-                return
-        tab1, tab2, tab3 = st.tabs(list(statements))
-        for tab, data in zip((tab1, tab2, tab3), statements.values()):
-            with tab:
-                if data is None or data.empty:
-                    st.info("No financial statement data available.")
-                else:
-                    table = data.head(8).copy()
-                    table.columns = [str(x.date()) if hasattr(x, "date") else str(x) for x in table.columns]
-                    st.dataframe(table, use_container_width=True)
-                    st.caption("As reported by Yahoo Finance; units follow the source statement.")
-
-
-def _news_panel(ticker):
-    with st.container(border=True):
-        st.markdown('<div class="nimbus-section">Recent news</div>', unsafe_allow_html=True)
-        try:
-            stories = company_news(ticker)
-            if not stories:
-                st.info("No recent news found.")
-            for title, provider, url in stories:
-                st.markdown(f"**{escape(title)}**")
-                st.caption(provider)
-                if isinstance(url, str) and url.startswith(("https://", "http://")):
-                    st.link_button("Read article ↗", url)
-                st.divider()
-        except Exception as exc:
-            st.info(f"News unavailable: {exc}")
 
 
 def show_company_comparison():
@@ -194,7 +172,7 @@ def show_company_comparison():
     st.markdown(CSS, unsafe_allow_html=True)
     st.markdown('<div class="nimbus-kicker">NIMBUS / FINANCIAL INTELLIGENCE</div>', unsafe_allow_html=True)
     st.markdown('<div class="nimbus-title">Company <span>Comparison</span></div>', unsafe_allow_html=True)
-    st.markdown('<div class="nimbus-muted">Compare companies side by side with price histories, financial ratios, statements and recent news.</div>', unsafe_allow_html=True)
+    st.markdown('<div class="nimbus-muted">Compare companies side by side with price histories and key financial metrics.</div>', unsafe_allow_html=True)
 
     with st.form("nimbus_comparison_inputs"):
         left, right, action = st.columns([2.2, 2.2, 1.2], vertical_alignment="bottom")
@@ -228,26 +206,15 @@ def show_company_comparison():
 
     t1, i1, t2, i2 = data
     period = st.selectbox("Price history period", options=["1mo", "3mo", "6mo", "1y", "5y"], index=3, key="nimbus_history_period")
-    c1, c2, c3 = st.columns([1.25, 1.25, 1.1], gap="medium")
+    # Two company cards sit side by side. The complete metrics table is BELOW them.
+    c1, c2 = st.columns(2, gap="medium")
     with c1:
         _profile(t1, i1, period or "1y")
     with c2:
         _profile(t2, i2, period or "1y")
-    with c3:
-        with st.container(border=True):
-            st.markdown('<div class="nimbus-section">Key metrics comparison</div>', unsafe_allow_html=True)
-            _comparison(t1, i1, t2, i2)
 
-    lower1, lower2, lower3 = st.columns([1, 1.35, 1], gap="medium")
-    with lower1:
-        analyst_ticker = st.selectbox("Analyst data for", [t1, t2], key="nimbus_analyst_choice")
-        _analysts(analyst_ticker, i1 if analyst_ticker == t1 else i2)
-    with lower2:
-        statement_ticker = st.selectbox("Statements for", [t1, t2], key="nimbus_statement_choice")
-        _statement_panel(statement_ticker)
-    with lower3:
-        news_ticker = st.selectbox("News for", [t1, t2], key="nimbus_news_choice")
-        _news_panel(news_ticker)
+    st.markdown('<div class="nimbus-section">Key metrics comparison</div>', unsafe_allow_html=True)
+    _comparison(t1, i1, t2, i2)
 
     st.caption(f"Source: Yahoo Finance (via yfinance). Viewed {datetime.now(timezone.utc):%Y-%m-%d %H:%M} UTC. Data may be delayed, incomplete, or cached for up to 15 minutes. Not investment advice.")
 
