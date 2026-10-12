@@ -6,7 +6,7 @@ from pathlib import Path
 import streamlit as st
 
 from analysis import get_analyst_ratings, get_financials, get_news, get_price
-
+from features.company_comparison import show_company_comparison
 
 PROJECT_ROOT = Path(__file__).resolve().parent.parent
 ICON_PATH = PROJECT_ROOT / "assets" / "nimbus-logo-icon.png"
@@ -268,7 +268,14 @@ st.markdown('<div class="or-divider">— OR —</div>', unsafe_allow_html=True)
 st.markdown('<div class="compare-title">Compare two companies</div>', unsafe_allow_html=True)
 compare_left, compare_center, compare_right = st.columns([1, 2, 1])
 with compare_center:
-    st.button("Compare Companies →", disabled=True, help="Company comparison is not available yet.")
+    if st.button("Compare Companies →"):
+        st.session_state["show_comparison"] = (
+            not st.session_state.get("show_comparison", False)
+        )
+
+if st.session_state.get("show_comparison", False):
+    st.divider()
+    show_company_comparison()
 
 st.markdown('<div class="header-rule"></div>', unsafe_allow_html=True)
 st.markdown('<h2 class="content-section-title">⭐ Favourite Companies</h2>', unsafe_allow_html=True)
