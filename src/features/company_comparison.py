@@ -27,6 +27,9 @@ LOGO_URLS = {
 
 CSS = """
 <style>
+.nimbus-logo-wrap {display:inline-flex;width:48px;height:48px;align-items:center;justify-content:center;flex-shrink:0;}
+.nimbus-logo-wrap img {max-width:44px;max-height:44px;object-fit:contain;}
+.nimbus-logo-fallback {flex-shrink:0;}
 .nimbus-title {font-size:2.65rem;font-weight:800;letter-spacing:-.045em;line-height:1.15;margin:.4rem 0;}
 .nimbus-title span {background:linear-gradient(95deg,#45b8ff,#8576ff);color:transparent;background-clip:text;-webkit-background-clip:text;}
 .nimbus-muted {color:#9daec3;font-size:.92rem;margin:0 0 1.2rem;}
@@ -84,24 +87,45 @@ def company_history(ticker, period):
     return result[["Close"]].dropna() if isinstance(result, pd.DataFrame) and "Close" in result else pd.DataFrame()
 
 
-def _company_logo(ticker):
-    """Return a small company logo, with initials if no logo is available."""
+def _company_logo(ticker, info=None):
+    """Use local logo, known brand icon, or company website favicon.
+
+    The initials badge remains visible if the remote image cannot load.
+    """
+    import base64
+    from urllib.parse import urlparse, quote
+
+    safe_ticker = escape(ticker)
+    fallback = f'<span class="nimbus-mark nimbus-logo-fallback">{escape(ticker[:2])}</span>'
     local = LOGO_DIR / f"{ticker}.png"
     if local.is_file():
-        import base64
         encoded = base64.b64encode(local.read_bytes()).decode("ascii")
-        return f'<img class="nimbus-logo" src="data:image/png;base64,{encoded}" alt="{escape(ticker)} logo">'
-    if ticker in LOGO_URLS:
-        return (f'<img class="nimbus-logo" src="{LOGO_URLS[ticker]}" '
-                f'alt="{escape(ticker)} logo">')
-    return f'<div class="nimbus-mark">{escape(ticker[:2])}</div>'
+        url = f"data:image/png;base64,{encoded}"
+    elif ticker in LOGO_URLS:
+        url = LOGO_URLS[ticker]
+    else:
+        website = str((info or {}).get("website") or "").strip()
+        hostname = urlparse(website if "://" in website else "https://" + website).hostname
+        if not hostname or "." not in hostname:
+            return fallback
+        # Domain-based favicons work for many companies, but aren't guaranteed
+        # to be their official corporate logo.
+        url = "https://www.google.com/s2/favicons?domain=" + quote(hostname, safe="") + "&sz=128"
+
+    # The fallback is shown automatically if the image fails to load.
+    return (f'<span class="nimbus-logo-wrap">'
+            f'<img class="nimbus-logo" src="{escape(url, quote=True)}" '
+            f'alt="{safe_ticker} logo" '
+            f'onerror="this.style.display=\'none\';this.nextElementSibling.style.display=\'flex\'">'
+            f'<span class="nimbus-mark nimbus-logo-fallback" style="display:none">{escape(ticker[:2])}</span>'
+            f'</span>')
 
 
 def _profile(ticker, info, period):
     name = escape(str(info.get("shortName") or info.get("longName") or ticker))
     currency = str(info.get("currency") or "USD")
     with st.container(border=True):
-        st.markdown(f'<div class="nimbus-company">{_company_logo(ticker)}<div><div class="nimbus-name">{name}</div><div class="nimbus-symbol">{escape(ticker)} · {escape(str(info.get("exchange") or "Listed company"))}</div></div></div>', unsafe_allow_html=True)
+        st.markdown(f'<div class="nimbus-company">{_company_logo(ticker, info)}<div><div class="nimbus-name">{name}</div><div class="nimbus-symbol">{escape(ticker)} · {escape(str(info.get("exchange") or "Listed company"))}</div></div></div>', unsafe_allow_html=True)
         price = info.get("currentPrice") or info.get("regularMarketPrice")
         previous = info.get("previousClose") or info.get("regularMarketPreviousClose")
         change = ((price / previous) - 1) * 100 if isinstance(price, (int, float)) and isinstance(previous, (int, float)) and previous else None
