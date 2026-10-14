@@ -7,6 +7,8 @@ import math
 import pandas as pd
 import streamlit as st
 import yfinance as yf
+import plotly.graph_objects as go
+from plotly.subplots import make_subplots
 
 
 PROJECT_ROOT = Path(__file__).resolve().parents[2]
@@ -83,8 +85,58 @@ def company_info(ticker):
 
 @st.cache_data(ttl=900, show_spinner=False)
 def company_history(ticker, period):
-    result = yf.Ticker(ticker).history(period=period, auto_adjust=True)
-    return result[["Close"]].dropna() if isinstance(result, pd.DataFrame) and "Close" in result else pd.DataFrame()
+    result = yf.Ticker(ticker).history(period=period, auto_adjust=False)
+    needed = ["Open", "High", "Low", "Close", "Volume"]
+    if not isinstance(result, pd.DataFrame) or any(c not in result.columns for c in needed):
+        return pd.DataFrame(columns=needed)
+    return result[needed].dropna(subset=["Close"])
+
+
+def _stock_chart(history, currency="USD"):
+    """Dark interactive area chart with volume and an OHLCV hover tooltip."""
+    dates = history.index
+    close = history["Close"]
+    # Each company uses one consistent price-series color.
+    line_color = "#15bf91"
+    fig = make_subplots(specs=[[{"secondary_y": True}]])
+    fig.add_trace(go.Bar(
+        x=dates, y=history["Volume"], name="Volume",
+        marker_color="rgba(145,163,180,0.45)",
+        hoverinfo="skip", showlegend=False,
+    ), secondary_y=True)
+    fig.add_trace(go.Scatter(
+        x=dates, y=close, name="Close", mode="lines",
+        line=dict(color=line_color, width=2.5),
+        fill="tozeroy", fillcolor="rgba(21,191,145,0.14)",
+        customdata=history[["Open", "High", "Low", "Volume"]].to_numpy(),
+        hovertemplate=(
+            "<b>%{x|%d %b %Y}</b><br>"
+            f"Close: {currency} %{{y:,.2f}}<br>"
+            f"Open: {currency} %{{customdata[0]:,.2f}}<br>"
+            f"High: {currency} %{{customdata[1]:,.2f}}<br>"
+            f"Low: {currency} %{{customdata[2]:,.2f}}<br>"
+            "Volume: %{customdata[3]:,.0f}<extra></extra>"
+        ),
+        showlegend=False,
+    ), secondary_y=False)
+    # Tighten price axis so the movements remain readable; area fills from bottom axis.
+    low = float(close.min())
+    high = float(close.max())
+    spread = max(high - low, high * .015, .01)
+    fig.update_yaxes(range=[max(0, low - spread * .24), high + spread * .17],
+                     tickformat=",.2f", showgrid=True, gridcolor="rgba(153,174,197,0.16)",
+                     zeroline=False, side="right", secondary_y=False)
+    fig.update_yaxes(range=[0, max(float(history["Volume"].max()) * 3.9, 1)],
+                     visible=False, showgrid=False, secondary_y=True)
+    fig.update_xaxes(showgrid=False, rangeslider_visible=False, tickfont=dict(color="#99a9bd"))
+    fig.update_layout(
+        height=285, margin=dict(l=8, r=20, t=16, b=12),
+        plot_bgcolor="#101923", paper_bgcolor="#101923",
+        font=dict(color="#dce5ef", size=12),
+        hovermode="x", hoverlabel=dict(bgcolor="#17232e", font_color="#f0f4f8"),
+        bargap=.18, dragmode="pan",
+    )
+    st.plotly_chart(fig, use_container_width=True, config={"displaylogo": False, "scrollZoom": False})
 
 
 def _company_logo(ticker, info=None):
@@ -134,7 +186,7 @@ def _profile(ticker, info, period):
         if history.empty:
             st.info("Historical prices unavailable for this ticker.")
         else:
-            st.line_chart(history, height=205, use_container_width=True)
+            _stock_chart(history, currency)
         a, b = st.columns(2)
         with a:
             st.metric("Market cap", _big(info.get("marketCap"), currency))
@@ -229,7 +281,10 @@ def show_company_comparison():
         return
 
     t1, i1, t2, i2 = data
-    period = st.selectbox("Price history period", options=["1mo", "3mo", "6mo", "1y", "5y"], index=3, key="nimbus_history_period")
+    period_labels = {"1M": "1mo", "3M": "3mo", "6M": "6mo", "1Y": "1y", "5Y": "5y", "ALL": "max"}
+    chosen = st.radio("Price history", list(period_labels), index=3,
+                      horizontal=True, key="nimbus_history_period")
+    period = period_labels[chosen]
     # Two company cards sit side by side. The complete metrics table is BELOW them.
     c1, c2 = st.columns(2, gap="medium")
     with c1:
