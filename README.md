@@ -1,43 +1,41 @@
-# Nimbus Financial Data Explorer
+# Nimbus Financial Intelligence
 
-## 1. Basic overview
+## Overview
 
-Nimbus is a cloud-enabled financial intelligence dashboard built to help analysts and investors quickly explore company information by ticker symbol. The project pulls market and company data from Yahoo Finance and presents it in a simple web interface using Streamlit.
+Nimbus is a Streamlit dashboard for exploring public company financial data. It retrieves market, statement, news, and analyst information from Yahoo Finance through `yfinance`. Local use still requires an internet connection for those data requests.
 
-The application is intended to support desk research by surfacing a mix of financial metrics, recent news, and analyst information in a single place. It provides a lightweight front-end for exploring public market data without requiring a large data platform or complex architecture.
+The app can run locally or be deployed to AWS with the CloudFormation template in `scripts/nimbus-aws.yaml`.
 
-In this project, the app is designed to be usable both as a local demonstration and as a cloud deployment on AWS. The overall objective is to showcase how a simple Python application can be packaged, deployed, and run in a cloud environment while remaining easy to use for students and analysts.
+## Application Pages
 
-## 2. Structure of the project
+The top navigation contains four pages:
 
-- `src/app.py`: Streamlit app entry point.
-- `src/analysis.py`: Shared Yahoo Finance data functions.
-- `assets/nimbus-logo-icon.png`: Square logo used for the browser tab icon.
-- `assets/nimbus-logo-wide.png`: Wide logo used in the main dashboard heading.
-- `src/features/`: Future one-file-per-feature modules; see its README.
+- **Company Search**: Search a ticker for financial statements, recent news, or stock price and analyst ratings. Successful results remain available when switching pages during the session.
+- **Company Comparison**: Compare two companies' prices and financial metrics.
+- **Favourites**: Placeholder page; saving and managing favourites is not implemented yet.
+- **Recently Viewed**: Review saved search records, shown five at a time with a Show more control.
+
+Search history is temporarily stored in `.cache/nimbus/search_history.csv`. It contains search metadata such as tickers, company names, and timestamps, not downloaded financial datasets. The cache is local to the machine and is excluded from Git.
+
+## Project Structure
+
+- `src/app.py`: Streamlit entry point, shared page styling, and navigation.
+- `src/analysis.py`: Shared Yahoo Finance data-access functions.
+- `src/features/company_search.py`: Company Search page and result rendering.
+- `src/features/company_comparison.py`: Company Comparison page, metrics, and Plotly chart.
+- `src/features/favourites.py`: Favourites placeholder page.
+- `src/features/history.py`: Local CSV search-history persistence and normalization.
+- `src/features/recent_history.py`: Recently Viewed page and five-row expansion.
+- `assets/`: Nimbus logos and optional company logos.
+- `scripts/nimbus-aws.yaml`: AWS CloudFormation deployment template.
 - `filings.ipynb`, `news.ipynb`, `stock_price_ratings.ipynb`: Exploratory notebooks.
+- `requirements.txt`: Python dependencies.
 
-- src/app.py: Streamlit application entry point and dashboard user interface.
-- src/analysis.py: Core functions that request and prepare financial data from Yahoo Finance.
-- src/features/: Place for future feature-based modules as the project expands.
-- requirements.txt: Python package dependencies for the app.
-- scripts/nimbus-aws.yaml: AWS CloudFormation template for creating the infrastructure needed to host the app on EC2.
-- notebooks (filings.ipynb, news.ipynb, stock_price_ratings.ipynb): exploratory analysis files used to prototype and test the data workflows before building the final app.
+See [src/features/README.md](src/features/README.md) for feature-module ownership.
 
-The app links together through a straightforward flow:
+## Requirements and Local Setup
 
-1. The user enters a stock ticker in the Streamlit interface.
-2. app.py calls the data functions in analysis.py.
-3. analysis.py retrieves data from Yahoo Finance using yfinance.
-4. The results are displayed in the dashboard as tables, metrics, and informational output.
-
-The AWS deployment template creates the network and EC2 hosting environment, while the app itself continues to run as a Streamlit service on the instance.
-
-## 3. Requirements and installation guide
-
-### Requirements
-
-This project uses the following core dependencies:
+The app is tested with Python 3.14.7 and Streamlit 1.65.0. Use Python 3.10 or newer; the app uses modern Python type syntax. Dependencies are listed in `requirements.txt`, including Streamlit, pandas, yfinance, and Plotly.
 
 - Python 3.14 (recommended for this project environment)
 - Streamlit
@@ -47,84 +45,35 @@ This project uses the following core dependencies:
 - git
 - AWS account access for CloudFormation deployment (optional for local use)
 
-### Local setup with a virtual environment
+From the project root:
 
-For an offline demo or local development, use a Python virtual environment to isolate dependencies and avoid system-wide package conflicts.
+```powershell
+py -3.14 -m venv nimbus
+.\nimbus\Scripts\python.exe -m pip install --upgrade pip
+.\nimbus\Scripts\python.exe -m pip install -r requirements.txt
+.\nimbus\Scripts\python.exe -m streamlit run src/app.py
+```
 
-From the project root, run:
+### macOS or Linux
 
 ```bash
 python3 -m venv .venv
-. .venv/bin/activate
+source .venv/bin/activate
 python -m pip install --upgrade pip
-pip install -r requirements.txt
+python -m pip install -r requirements.txt
+python -m streamlit run src/app.py
 ```
 
-This creates an isolated environment for the project and installs the required packages inside it.
+Streamlit prints the local URL, usually `http://localhost:8501`. The environment folders and `.cache/` are ignored by Git.
 
-### Offline demo guidance
+## AWS Deployment
 
-For an offline or classroom demonstration:
+The CloudFormation template provisions an EC2-hosted Streamlit app in `us-east-1`, accessible on port `8501`. It requires an EC2 key pair and a Git repository URL. The template's default GitHub URL is a placeholder (`your-org/nimbus-app-ds600g5`); set it to the actual repository before creating a stack.
 
-- Keep the app local to the machine.
-- Use the virtual environment for dependency isolation.
-- Avoid relying on external cloud services when demonstrating the app locally.
-- Run the app directly from the project root using the local Streamlit server.
+To deploy, open CloudFormation in `us-east-1`, create a stack using `scripts/nimbus-aws.yaml`, provide the required parameters, and wait for the stack outputs. The `StreamlitUrl` output provides the app address. AWS deployment has not been validated against a live account in this development environment.
 
-### AWS setup with CloudFormation YAML
-
-The project includes a CloudFormation template for AWS deployment in the scripts folder:
-
-- scripts/nimbus-aws.yaml
-
-This template is intended to deploy the app on an EC2 instance in us-east-1 and configures the networking and security settings required for the app to be accessible from the internet.
-
-Recommended AWS deployment process:
-
-1. Log in to the AWS Management Console.
-2. Open CloudFormation in the us-east-1 region.
-3. Choose Create stack.
-4. Upload the template file from scripts/nimbus-aws.yaml.
-5. Review the parameters, including the EC2 key pair and GitHub repository URL.
-6. Launch the stack and wait for the infrastructure to be created.
-7. Once the EC2 instance is running, access the published app URL on port 8501.
-
-This setup is useful for learning AWS networking and EC2 hosting in a classroom environment.
-
-## 4. Instructions on how to run the app
-
-### Run locally
-
-After activating the virtual environment and installing dependencies, start the app from the project root:
-
-```bash
-. .venv/bin/activate
-streamlit run src/app.py
-```
-
-The terminal will provide a local URL, usually on port 8501. Open that URL in your browser to use the app.
-
-### Run with explicit host and port settings
-
-For a remote or cloud-hosted environment, the app should be started with the following configuration:
-
-```bash
-. .venv/bin/activate
-python -m streamlit run src/app.py --server.address 0.0.0.0 --server.port 8501
-```
-
-This makes the app listen on all interfaces and port 8501, which is required for accessibility from outside the local machine.
-
-## 5. Credits and course information
-
-### Credits
+## Credits
 
 Team Members: Wei Zihao, Paavas Bansal, Nicolyne Tiana Lie
 
-### Course
-
-DS600 Cloud Computing for Economics, SMU MDSE
-
-## Notes
-
-This project is a practical example of how data-driven web applications can be built with Python, Streamlit, and cloud infrastructure. It is well suited for use in a teaching environment where students are learning how to connect data workflows, AWS networking, and cloud-hosted app deployment.
+Course: DS600 Cloud Computing for Economics, SMU MDSE
