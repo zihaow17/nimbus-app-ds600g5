@@ -1,11 +1,23 @@
 """Streamlit homepage for the financial data explorer."""
 
+import base64
+from pathlib import Path
+
 import streamlit as st
 
 from analysis import get_analyst_ratings, get_financials, get_news, get_price
+from features.company_comparison import show_company_comparison
 
+PROJECT_ROOT = Path(__file__).resolve().parent.parent
+ICON_PATH = PROJECT_ROOT / "assets" / "nimbus-logo-icon.png"
+WIDE_LOGO_PATH = PROJECT_ROOT / "assets" / "nimbus-logo-wide.png"
+WIDE_LOGO_DATA = base64.b64encode(WIDE_LOGO_PATH.read_bytes()).decode("ascii")
 
-st.set_page_config(page_title="Nimbus | Financial Intelligence", layout="wide")
+st.set_page_config(
+    page_title="Nimbus | Financial Intelligence",
+    page_icon=str(ICON_PATH),
+    layout="wide",
+)
 
 st.markdown(
     """
@@ -46,11 +58,10 @@ st.markdown(
         text-align: center;
     }
     .hero-name {
-        color: #f6f7f4;
-        font-size: 2.35rem;
-        font-weight: 700;
-        line-height: 1.2;
-        margin: 0 0 0.65rem;
+        display: block;
+        margin: 0 auto 1.25rem;
+        max-width: min(100%, 32rem);
+        width: 100%;
     }
     .hero-title {
         color: #e1e3e1;
@@ -177,9 +188,13 @@ with settings_column:
 
 st.markdown('<div class="header-rule"></div>', unsafe_allow_html=True)
 st.markdown(
-    """
+    f"""
     <section class="hero">
-        <h1 class="hero-name">NIMBUS</h1>
+        <img
+            class="hero-name"
+            src="data:image/png;base64,{WIDE_LOGO_DATA}"
+            alt="Nimbus"
+        />
         <div class="hero-title">Financial Intelligence Dashboard</div>
         <p class="hero-description">Search for a company to explore its financial data</p>
     </section>
@@ -252,8 +267,15 @@ if run_analysis:
 st.markdown('<div class="or-divider">— OR —</div>', unsafe_allow_html=True)
 st.markdown('<div class="compare-title">Compare two companies</div>', unsafe_allow_html=True)
 compare_left, compare_center, compare_right = st.columns([1, 2, 1])
+
 with compare_center:
-    st.button("Compare Companies →", disabled=True, help="Company comparison is not available yet.")
+    if st.button("Compare Companies →", key="open_comparison"):
+        st.session_state["show_comparison"] = (
+            not st.session_state.get("show_comparison", False)
+        )
+
+if st.session_state.get("show_comparison", False):
+    show_company_comparison()
 
 st.markdown('<div class="header-rule"></div>', unsafe_allow_html=True)
 st.markdown('<h2 class="content-section-title">⭐ Favourite Companies</h2>', unsafe_allow_html=True)
