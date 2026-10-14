@@ -7,6 +7,7 @@ import streamlit as st
 
 from analysis import get_analyst_ratings, get_financials, get_news, get_price
 from features.company_comparison import show_company_comparison
+from features.loading_screen import show_loading_screen
 
 PROJECT_ROOT = Path(__file__).resolve().parent.parent
 ICON_PATH = PROJECT_ROOT / "assets" / "nimbus-logo-icon.png"
@@ -18,6 +19,8 @@ st.set_page_config(
     page_icon=str(ICON_PATH),
     layout="wide",
 )
+
+show_loading_screen()
 
 st.markdown(
     """
