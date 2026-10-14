@@ -42,6 +42,7 @@ This project uses the following core dependencies:
 - Python 3.14 (recommended for this project environment)
 - Streamlit
 - pandas
+- plotly
 - yfinance
 - git
 - AWS account access for CloudFormation deployment (optional for local use)
