@@ -37,7 +37,13 @@ See [src/features/README.md](src/features/README.md) for feature-module ownershi
 
 The app is tested with Python 3.14.7 and Streamlit 1.65.0. Use Python 3.10 or newer; the app uses modern Python type syntax. Dependencies are listed in `requirements.txt`, including Streamlit, pandas, yfinance, and Plotly.
 
-### Windows PowerShell
+- Python 3.14 (recommended for this project environment)
+- Streamlit
+- pandas
+- plotly
+- yfinance
+- git
+- AWS account access for CloudFormation deployment (optional for local use)
 
 From the project root:
 
