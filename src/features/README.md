@@ -1,7 +1,13 @@
-# Feature modules
+# Feature Modules
 
-Add each user-facing feature as its own Python module in this directory, such as
-`filings.py`, `news.py`, or `stock_price_ratings.py`.
+Each user-facing page or feature is implemented in its own module:
 
-Keep the Streamlit entry point in `src/app.py`. Shared data-access helpers remain
-in `src/analysis.py` until they are intentionally reorganized.
+- `company_search.py`: ticker search, data retrieval orchestration, and retained results.
+- `company_comparison.py`: two-company metrics and price-history comparison.
+- `favourites.py`: placeholder for the future favourites feature.
+- `recent_history.py`: display of saved searches and five-row expansion.
+- `history.py`: shared CSV persistence and normalization used by search and comparison.
+
+`src/app.py` owns shared app configuration, styling, and page navigation. Shared
+Yahoo Finance data-access functions live in `src/analysis.py`. Local history is
+stored under the project-level `.cache/nimbus/` directory and should not be committed.

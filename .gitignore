@@ -157,9 +157,16 @@ activemq-data/
 env/
 venv/
 ENV/
+nimbus/
 ds600p/
 env.bak/
 venv.bak/
+
+# Local temporary app cache
+.cache/
+
+# Reference materials
+/reference/
 
 # Spyder project settings
 .spyderproject

@@ -1,23 +1,23 @@
 """Streamlit homepage for the financial data explorer."""
 
-import base64
 from pathlib import Path
 
 import streamlit as st
 
-from analysis import get_analyst_ratings, get_financials, get_news, get_price
 from features.company_comparison import show_company_comparison
 from features.loading_screen import show_loading_screen
+from features.company_search import show_company_search_page
+from features.favourites import show_favourites_page
+from features.recent_history import show_recent_history_page
 
 PROJECT_ROOT = Path(__file__).resolve().parent.parent
 ICON_PATH = PROJECT_ROOT / "assets" / "nimbus-logo-icon.png"
-WIDE_LOGO_PATH = PROJECT_ROOT / "assets" / "nimbus-logo-wide.png"
-WIDE_LOGO_DATA = base64.b64encode(WIDE_LOGO_PATH.read_bytes()).decode("ascii")
 
 st.set_page_config(
     page_title="Nimbus | Financial Intelligence",
     page_icon=str(ICON_PATH),
     layout="wide",
+    initial_sidebar_state="collapsed",
 )
 
 show_loading_screen()
@@ -28,7 +28,6 @@ st.markdown(
     .stApp {
         background: #111315;
         color: #f0f1ef;
-        font-family: "SFMono-Regular", Menlo, Consolas, monospace;
     }
     .stApp .block-container {
         max-width: 1160px;
@@ -37,9 +36,61 @@ st.markdown(
     .stApp [data-testid="stHeader"] {
         background: transparent;
     }
+    [data-testid="stSidebar"],
+    [data-testid="stSidebarCollapseButton"],
+    [data-testid="stSidebarCollapsedControl"] {
+        display: none;
+    }
     .stApp [data-testid="stMarkdownContainer"] {
         color: #f0f1ef;
-        font-family: "SFMono-Regular", Menlo, Consolas, monospace;
+    }
+    .stApp [data-testid="stMarkdownContainer"] h2.content-section-title {
+        font-family: Consolas, monospace;
+    }
+    .topbar-brand,
+    .topbar-action,
+    .hero,
+    .or-divider,
+    .compare-title,
+    .content-section-title,
+    .recent-history-header,
+    .recent-history-cell,
+    .recent-history-reload,
+    .stApp [data-testid="stForm"],
+    .stApp [data-testid="stSelectbox"],
+    .stApp [data-testid="stRadio"] {
+        font-family: Consolas, monospace;
+    }
+    .st-key-nimbus_page [data-testid="stRadioGroup"] {
+        align-items: stretch;
+        display: flex;
+        flex-direction: row;
+        gap: 2rem;
+    }
+    .st-key-nimbus_page [data-testid="stRadioOption"] {
+        align-items: center;
+        background: transparent !important;
+        border: 0;
+        border-bottom: 2px solid transparent;
+        border-radius: 0;
+        color: #aeb3b4;
+        cursor: pointer;
+        margin: 0;
+        padding: 0.7rem 0.2rem 0.55rem;
+    }
+    .st-key-nimbus_page [data-testid="stRadioOption"][data-selected="true"] {
+        border-bottom-color: #55c7f7;
+        color: #f0f1ef;
+    }
+    .st-key-nimbus_page [data-testid="stRadioOption"] > div > div:first-child {
+        display: none;
+    }
+    .st-key-nimbus_page [data-testid="stRadioOption"] [data-testid="stMarkdownContainer"] p {
+        font-family: Consolas, monospace;
+        margin: 0;
+    }
+    .st-key-nimbus_page_mobile {
+        display: none;
     }
     .topbar-brand {
         color: #f4f5f2;
@@ -91,7 +142,7 @@ st.markdown(
         border-radius: 2px;
         color: #f0f1ef;
         min-height: 3.4rem;
-        font-family: "SFMono-Regular", Menlo, Consolas, monospace;
+        font-family: Consolas, monospace;
         font-size: 1rem;
     }
     .stApp [data-testid="stTextInput"] input::placeholder {
@@ -103,6 +154,16 @@ st.markdown(
         border-color: #4b5154;
         border-radius: 2px;
         color: #e4e6e4;
+        font-family: Consolas, monospace;
+    }
+    .stApp .st-key-nimbus_page_mobile [role="group"] {
+        background: transparent !important;
+        border-color: transparent !important;
+        box-shadow: none;
+    }
+    .stApp .st-key-nimbus_page_mobile input[role="combobox"],
+    .stApp .st-key-nimbus_page_mobile button[aria-label="Open"] {
+        font-family: Consolas, monospace;
     }
     .stApp [data-testid="stCaptionContainer"] p {
         color: #969d9f;
@@ -114,9 +175,23 @@ st.markdown(
         border: 1px solid #737a7d;
         border-radius: 2px;
         color: #f0f1ef;
-        font-family: "SFMono-Regular", Menlo, Consolas, monospace;
+        font-family: Consolas, monospace;
         min-height: 2.7rem;
         transition: none;
+    }
+    .stApp [data-testid="stElementContainer"]:has([data-testid="stFormSubmitButton"]),
+    .stApp [data-testid="stElementContainer"]:has([data-testid="stButton"]) {
+        width: 100%;
+    }
+    .stApp [data-testid="stFormSubmitButton"],
+    .stApp [data-testid="stButton"] {
+        display: flex;
+        justify-content: center;
+        width: 100%;
+    }
+    .stApp [data-testid="stFormSubmitButton"] button,
+    .stApp [data-testid="stButton"] button {
+        width: auto;
     }
     .stApp [data-testid="stFormSubmitButton"] button:hover,
     .stApp [data-testid="stButton"] button:hover {
@@ -154,9 +229,59 @@ st.markdown(
     .recent-space {
         min-height: 5rem;
     }
+    .recent-history-header {
+        font-weight: 700;
+        color: #e9ebe8;
+        padding-bottom: 0.5rem;
+        margin-top: 0.15rem;
+    }
+    .recent-history-cell {
+        color: #edf1f1;
+        line-height: 1.5;
+        min-height: 1.9rem;
+        display: flex;
+        align-items: center;
+        height: 100%;
+    }
+    .recent-history-button-wrap {
+        display: flex;
+        align-items: center;
+        justify-content: center;
+        height: 100%;
+        min-height: 1.9rem;
+    }
+    .recent-history-row-gap {
+        height: 0.75rem;
+    }
+    .recent-history-row-gap-header {
+        height: 0.9rem;
+    }
+    .recent-history-reload {
+        min-height: 1.6rem;
+        height: 1.6rem;
+        padding: 0.1rem 0.7rem;
+        border-radius: 0.45rem;
+        border: 1px solid #6d7680;
+        background: rgba(27, 31, 35, 0.8);
+        color: #edf1f1;
+        font-size: 0.72rem;
+        line-height: 1;
+        cursor: not-allowed;
+        opacity: 0.85;
+        display: inline-flex;
+        align-items: center;
+        justify-content: center;
+        margin: auto 0;
+    }
     @media (max-width: 700px) {
         .stApp .block-container {
             padding: 1rem 1rem 2rem;
+        }
+        .st-key-nimbus_page {
+            display: none;
+        }
+        .st-key-nimbus_page_mobile {
+            display: block;
         }
         .hero {
             padding: 2.5rem 0.25rem 1.5rem;
@@ -179,9 +304,7 @@ st.markdown(
     unsafe_allow_html=True,
 )
 
-brand_column, spacer_column, account_column, settings_column = st.columns(
-    [5, 5.5, 1.2, 0.5]
-)
+brand_column, spacer_column, account_column, settings_column = st.columns([5, 5.5, 1.2, 0.5])
 with brand_column:
     st.markdown('<div class="topbar-brand">NIMBUS</div>', unsafe_allow_html=True)
 with account_column:
@@ -190,99 +313,41 @@ with settings_column:
     st.markdown('<div class="topbar-action">⚙</div>', unsafe_allow_html=True)
 
 st.markdown('<div class="header-rule"></div>', unsafe_allow_html=True)
-st.markdown(
-    f"""
-    <section class="hero">
-        <img
-            class="hero-name"
-            src="data:image/png;base64,{WIDE_LOGO_DATA}"
-            alt="Nimbus"
-        />
-        <div class="hero-title">Financial Intelligence Dashboard</div>
-        <p class="hero-description">Search for a company to explore its financial data</p>
-    </section>
-    """,
-    unsafe_allow_html=True,
+page_options = ("Company Search", "Company Comparison", "Favourites", "Recently Viewed")
+
+
+def _sync_mobile_page() -> None:
+    """Copy the mobile selector value into the shared page selection."""
+    st.session_state["nimbus_page"] = st.session_state["nimbus_page_mobile"]
+
+
+if "nimbus_page" not in st.session_state:
+    st.session_state["nimbus_page"] = page_options[0]
+if st.session_state.get("nimbus_page_mobile") != st.session_state["nimbus_page"]:
+    st.session_state["nimbus_page_mobile"] = st.session_state["nimbus_page"]
+
+st.radio(
+    "Pages",
+    page_options,
+    horizontal=True,
+    key="nimbus_page",
+    label_visibility="collapsed",
+)
+st.selectbox(
+    "Pages",
+    page_options,
+    key="nimbus_page_mobile",
+    on_change=_sync_mobile_page,
+    label_visibility="collapsed",
 )
 
-with st.form("analysis_form"):
-    ticker = st.text_input(
-        "Company or ticker",
-        placeholder="🔍  Search company or ticker",
-        label_visibility="collapsed",
-        help="Enter a ticker symbol, for example AAPL or MSFT.",
-    )
-    st.caption("e.g. Apple, AAPL, Microsoft, MSFT")
-    analysis_type = st.selectbox(
-        "Data to explore",
-        ("filings", "news", "stock price ratings"),
-        format_func=lambda value: {
-            "filings": "Financial statements",
-            "news": "Recent news",
-            "stock price ratings": "Stock price and analyst ratings",
-        }[value],
-    )
-    button_left, button_center, button_right = st.columns([1, 1, 1])
-    with button_center:
-        run_analysis = st.form_submit_button("Search")
+selected_page = st.session_state["nimbus_page"]
 
-if run_analysis:
-    ticker = ticker.strip().upper()
-    if not ticker:
-        st.error("Enter a ticker symbol before running an analysis.")
-    else:
-        try:
-            with st.spinner(f"Loading {analysis_type} for {ticker}..."):
-                if analysis_type == "filings":
-                    results = get_financials(ticker)
-                    for section, data in results.items():
-                        st.subheader(section)
-                        if data.empty:
-                            st.info(f"No {section.lower()} data was found for {ticker}.")
-                        else:
-                            st.dataframe(data, use_container_width=True)
-
-                elif analysis_type == "news":
-                    st.subheader(f"Recent news for {ticker}")
-                    articles = get_news(ticker)
-                    if articles.empty:
-                        st.info(f"No recent news was found for {ticker}.")
-                    else:
-                        st.dataframe(articles, use_container_width=True, hide_index=True)
-
-                else:
-                    st.subheader(f"Stock price and analyst ratings for {ticker}")
-                    price = get_price(ticker)
-                    if price is None:
-                        st.metric("Current price", "Not available")
-                    else:
-                        st.metric("Current price", f"${price:,.2f}")
-
-                    ratings = get_analyst_ratings(ticker)
-                    if ratings.empty:
-                        st.info(f"No analyst recommendations were found for {ticker}.")
-                    else:
-                        st.dataframe(ratings, use_container_width=True)
-        except Exception as error:
-            st.error(f"Could not load data for {ticker}. Check the symbol and try again.")
-            st.caption(f"Details: {error}")
-
-st.markdown('<div class="or-divider">— OR —</div>', unsafe_allow_html=True)
-st.markdown('<div class="compare-title">Compare two companies</div>', unsafe_allow_html=True)
-compare_left, compare_center, compare_right = st.columns([1, 2, 1])
-
-with compare_center:
-    if st.button("Compare Companies →", key="open_comparison"):
-        st.session_state["show_comparison"] = (
-            not st.session_state.get("show_comparison", False)
-        )
-
-if st.session_state.get("show_comparison", False):
+if selected_page == "Company Search":
+    show_company_search_page()
+elif selected_page == "Company Comparison":
     show_company_comparison()
-
-st.markdown('<div class="header-rule"></div>', unsafe_allow_html=True)
-st.markdown('<h2 class="content-section-title">⭐ Favourite Companies</h2>', unsafe_allow_html=True)
-st.markdown('<div class="reserved-space" aria-hidden="true"></div>', unsafe_allow_html=True)
-
-st.markdown('<h2 class="content-section-title">Recently Viewed</h2>', unsafe_allow_html=True)
-st.markdown('<div class="recent-space" aria-hidden="true"></div>', unsafe_allow_html=True)
+elif selected_page == "Favourites":
+    show_favourites_page()
+else:
+    show_recent_history_page()

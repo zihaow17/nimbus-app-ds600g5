@@ -10,6 +10,8 @@ import yfinance as yf
 import plotly.graph_objects as go
 from plotly.subplots import make_subplots
 
+from features.history import record_search
+
 
 PROJECT_ROOT = Path(__file__).resolve().parents[2]
 LOGO_DIR = PROJECT_ROOT / "assets" / "company_logos"
@@ -32,6 +34,7 @@ CSS = """
 .nimbus-logo-wrap {display:inline-flex;width:48px;height:48px;align-items:center;justify-content:center;flex-shrink:0;}
 .nimbus-logo-wrap img {max-width:44px;max-height:44px;object-fit:contain;}
 .nimbus-logo-fallback {flex-shrink:0;}
+.nimbus-kicker, .nimbus-title, .nimbus-muted, .nimbus-section {font-family:Consolas,monospace;}
 .nimbus-title {font-size:2.65rem;font-weight:800;letter-spacing:-.045em;line-height:1.15;margin:.4rem 0;}
 .nimbus-title span {background:linear-gradient(95deg,#45b8ff,#8576ff);color:transparent;background-clip:text;-webkit-background-clip:text;}
 .nimbus-muted {color:#9daec3;font-size:.92rem;margin:0 0 1.2rem;}
@@ -54,12 +57,14 @@ div[data-testid="stMetricValue"] {font-size:1.48rem;}
 
 
 def _number(value, decimals=2, prefix="", suffix=""):
+    """Format a finite numeric value with optional prefix and suffix."""
     if not isinstance(value, (int, float)) or isinstance(value, bool) or not math.isfinite(value):
         return "N/A"
     return f"{prefix}{value:,.{decimals}f}{suffix}"
 
 
 def _big(value, currency="USD"):
+    """Format a financial value using compact K, M, B, or T units."""
     if not isinstance(value, (int, float)) or not math.isfinite(value):
         return "N/A"
     sign = "-" if value < 0 else ""
@@ -72,11 +77,13 @@ def _big(value, currency="USD"):
 
 
 def _percent(value):
+    """Convert a fractional value to a percentage string."""
     return _number(value * 100, suffix="%") if isinstance(value, (int, float)) else "N/A"
 
 
 @st.cache_data(ttl=900, show_spinner=False)
 def company_info(ticker):
+    """Fetch company details and reject responses without a recognizable company."""
     info = yf.Ticker(ticker).info or {}
     if not info or not (info.get("symbol") or info.get("shortName")):
         raise ValueError(f"No Yahoo Finance information found for {ticker}.")
@@ -85,6 +92,7 @@ def company_info(ticker):
 
 @st.cache_data(ttl=900, show_spinner=False)
 def company_history(ticker, period):
+    """Fetch and validate the OHLCV price history needed by the comparison chart."""
     result = yf.Ticker(ticker).history(period=period, auto_adjust=False)
     needed = ["Open", "High", "Low", "Close", "Volume"]
     if not isinstance(result, pd.DataFrame) or any(c not in result.columns for c in needed):
@@ -174,6 +182,7 @@ def _company_logo(ticker, info=None):
 
 
 def _profile(ticker, info, period):
+    """Render one company's identity, key metrics, and selected price history."""
     name = escape(str(info.get("shortName") or info.get("longName") or ticker))
     currency = str(info.get("currency") or "USD")
     with st.container(border=True):
@@ -209,6 +218,7 @@ def _dividend_yield(info):
 
 
 def _comparison(t1, i1, t2, i2):
+    """Render comparable financial metrics and warn when currencies differ."""
     c1 = str(i1.get("currency") or "USD")
     c2 = str(i2.get("currency") or "USD")
     rows = [
@@ -243,7 +253,7 @@ def _comparison(t1, i1, t2, i2):
         st.warning(f"Currencies differ ({c1} versus {c2}); values are not FX-converted.")
 
 
-def show_company_comparison():
+def show_company_comparison(ticker1: str | None = None, ticker2: str | None = None):
     """Render the complete Nimbus comparison interface."""
     st.markdown(CSS, unsafe_allow_html=True)
     st.markdown('<div class="nimbus-kicker">NIMBUS / FINANCIAL INTELLIGENCE</div>', unsafe_allow_html=True)
@@ -253,29 +263,57 @@ def show_company_comparison():
     with st.form("nimbus_comparison_inputs"):
         left, right, action = st.columns([2.2, 2.2, 1.2], vertical_alignment="bottom")
         with left:
-            ticker1 = st.text_input("First company ticker", value="AAPL", key="nimbus_ticker1").strip().upper()
+            ticker1_value = st.text_input("First company ticker", value=(ticker1 or "AAPL").upper(), key="nimbus_ticker1").strip().upper()
         with right:
-            ticker2 = st.text_input("Second company ticker", value="MSFT", key="nimbus_ticker2").strip().upper()
+            ticker2_value = st.text_input("Second company ticker", value=(ticker2 or "MSFT").upper(), key="nimbus_ticker2").strip().upper()
         with action:
             submitted = st.form_submit_button("Compare →", type="primary", use_container_width=True)
 
     if submitted:
-        if not ticker1 or not ticker2:
+        ticker1_value = ticker1_value.strip().upper()
+        ticker2_value = ticker2_value.strip().upper()
+        if not ticker1_value or not ticker2_value:
             st.warning("Enter two stock tickers.")
             return
-        if ticker1 == ticker2:
+        if ticker1_value == ticker2_value:
             st.warning("Choose two different tickers.")
             return
         with st.spinner("Fetching data from Yahoo Finance..."):
             try:
-                info1 = company_info(ticker1)
-                info2 = company_info(ticker2)
+                info1 = company_info(ticker1_value)
+                info2 = company_info(ticker2_value)
             except Exception as exc:
                 st.error(f"Could not retrieve company information: {exc}")
                 return
-        st.session_state["nimbus_comparison_results"] = (ticker1, info1, ticker2, info2)
+        record_search(
+            "comparison",
+            ticker1_value,
+            ticker2_value,
+            primary_name=(info1.get("shortName") or info1.get("longName") or ticker1_value),
+            secondary_name=(info2.get("shortName") or info2.get("longName") or ticker2_value),
+        )
+        st.session_state["nimbus_comparison_results"] = (ticker1_value, info1, ticker2_value, info2)
 
     data = st.session_state.get("nimbus_comparison_results")
+    if data is None:
+        if ticker1 and ticker2:
+            with st.spinner("Fetching data from Yahoo Finance..."):
+                try:
+                    info1 = company_info(ticker1)
+                    info2 = company_info(ticker2)
+                except Exception as exc:
+                    st.error(f"Could not retrieve company information: {exc}")
+                    return
+            record_search(
+                "comparison",
+                ticker1,
+                ticker2,
+                primary_name=(info1.get("shortName") or info1.get("longName") or ticker1),
+                secondary_name=(info2.get("shortName") or info2.get("longName") or ticker2),
+            )
+            st.session_state["nimbus_comparison_results"] = (ticker1, info1, ticker2, info2)
+            data = st.session_state["nimbus_comparison_results"]
+
     if data is None:
         st.info("Enter two tickers and select Compare to load the dashboard.")
         return
@@ -285,7 +323,6 @@ def show_company_comparison():
     chosen = st.radio("Price history", list(period_labels), index=3,
                       horizontal=True, key="nimbus_history_period")
     period = period_labels[chosen]
-    # Two company cards sit side by side. The complete metrics table is BELOW them.
     c1, c2 = st.columns(2, gap="medium")
     with c1:
         _profile(t1, i1, period or "1y")
