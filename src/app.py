@@ -5,6 +5,7 @@ from pathlib import Path
 import streamlit as st
 
 from features.company_comparison import show_company_comparison
+from features.loading_screen import show_loading_screen
 from features.company_search import show_company_search_page
 from features.favourites import show_favourites_page
 from features.recent_history import show_recent_history_page
@@ -18,6 +19,8 @@ st.set_page_config(
     layout="wide",
     initial_sidebar_state="collapsed",
 )
+
+show_loading_screen()
 
 st.markdown(
     """
