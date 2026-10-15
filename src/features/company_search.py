@@ -53,7 +53,12 @@ def _run_single_search(ticker: str, analysis_type: str) -> None:
             "company_name": company_name,
             **result,
         }
-        record_search("single", ticker, primary_name=company_name)
+        record_search(
+            "single",
+            ticker,
+            primary_name=company_name,
+            user_id=st.session_state.get("current_user_id"),
+        )
     except Exception as error:
         st.error(f"Could not load data for {ticker}. Check the symbol and try again.")
         st.caption(f"Details: {error}")
@@ -95,8 +100,19 @@ def _render_search_results() -> None:
             st.dataframe(ratings, use_container_width=True)
 
 
-def show_company_search_page() -> None:
+def show_company_search_page(initial_ticker: str | None = None, auto_search: bool = False) -> None:
     """Render the company search form and any retained search results."""
+    if st.session_state.get("history_detail_active"):
+        back_col, _ = st.columns([1, 6])
+        with back_col:
+            if st.button("<- Back", key="history_detail_company_search_back"):
+                st.session_state["history_detail_active"] = False
+                st.session_state["history_detail_record"] = {}
+                st.session_state["history_detail_search_ran"] = False
+                st.session_state["nimbus_page"] = "Recently Viewed"
+                st.session_state["nimbus_page_mobile"] = "Recently Viewed"
+                st.rerun()
+
     st.markdown(
         f"""
         <section class="hero">
@@ -111,6 +127,7 @@ def show_company_search_page() -> None:
     with st.form("analysis_form"):
         ticker = st.text_input(
             "Company or ticker",
+            value=(initial_ticker or "").strip().upper(),
             placeholder="🔍  Search company or ticker",
             label_visibility="collapsed",
             help="Enter a ticker symbol, for example AAPL or MSFT.",
@@ -129,7 +146,12 @@ def show_company_search_page() -> None:
         with button_center:
             run_analysis = st.form_submit_button("Search")
 
+    if auto_search and initial_ticker and not st.session_state.get("history_detail_search_ran"):
+        st.session_state["history_detail_search_ran"] = initial_ticker.strip().upper()
+        _run_single_search(initial_ticker.strip().upper(), "stock price ratings")
+
     if run_analysis:
+        st.session_state["history_detail_search_ran"] = False
         _run_single_search(ticker, analysis_type)
 
     _render_search_results()

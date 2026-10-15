@@ -255,6 +255,16 @@ def _comparison(t1, i1, t2, i2):
 
 def show_company_comparison(ticker1: str | None = None, ticker2: str | None = None):
     """Render the complete Nimbus comparison interface."""
+    if st.session_state.get("history_detail_active"):
+        back_col, _ = st.columns([1, 6])
+        with back_col:
+            if st.button("<- Back", key="history_detail_comparison_back"):
+                st.session_state["history_detail_active"] = False
+                st.session_state["history_detail_record"] = {}
+                st.session_state["nimbus_page"] = "Recently Viewed"
+                st.session_state["nimbus_page_mobile"] = "Recently Viewed"
+                st.rerun()
+
     st.markdown(CSS, unsafe_allow_html=True)
     st.markdown('<div class="nimbus-kicker">NIMBUS / FINANCIAL INTELLIGENCE</div>', unsafe_allow_html=True)
     st.markdown('<div class="nimbus-title">Company <span>Comparison</span></div>', unsafe_allow_html=True)
@@ -291,6 +301,7 @@ def show_company_comparison(ticker1: str | None = None, ticker2: str | None = No
             ticker2_value,
             primary_name=(info1.get("shortName") or info1.get("longName") or ticker1_value),
             secondary_name=(info2.get("shortName") or info2.get("longName") or ticker2_value),
+            user_id=st.session_state.get("current_user_id"),
         )
         st.session_state["nimbus_comparison_results"] = (ticker1_value, info1, ticker2_value, info2)
 
@@ -310,6 +321,7 @@ def show_company_comparison(ticker1: str | None = None, ticker2: str | None = No
                 ticker2,
                 primary_name=(info1.get("shortName") or info1.get("longName") or ticker1),
                 secondary_name=(info2.get("shortName") or info2.get("longName") or ticker2),
+                user_id=st.session_state.get("current_user_id"),
             )
             st.session_state["nimbus_comparison_results"] = (ticker1, info1, ticker2, info2)
             data = st.session_state["nimbus_comparison_results"]
