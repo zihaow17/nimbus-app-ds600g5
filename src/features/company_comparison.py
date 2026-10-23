@@ -255,6 +255,16 @@ def _comparison(t1, i1, t2, i2):
 
 def show_company_comparison(ticker1: str | None = None, ticker2: str | None = None):
     """Render the complete Nimbus comparison interface."""
+    if st.session_state.get("history_detail_active"):
+        back_col, _ = st.columns([1, 6])
+        with back_col:
+            if st.button("<- Back", key="history_detail_comparison_back"):
+                st.session_state["history_detail_active"] = False
+                st.session_state["history_detail_record"] = {}
+                st.session_state["nimbus_page"] = "Recently Viewed"
+                st.session_state["nimbus_page_mobile"] = "Recently Viewed"
+                st.rerun()
+
     st.markdown(CSS, unsafe_allow_html=True)
     st.markdown('<div class="nimbus-kicker">NIMBUS / FINANCIAL INTELLIGENCE</div>', unsafe_allow_html=True)
     st.markdown('<div class="nimbus-title">Company <span>Comparison</span></div>', unsafe_allow_html=True)

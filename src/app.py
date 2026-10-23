@@ -13,6 +13,7 @@ from features.recent_history import show_recent_history_page
 PROJECT_ROOT = Path(__file__).resolve().parent.parent
 ICON_PATH = PROJECT_ROOT / "assets" / "nimbus-logo-icon.png"
 
+
 st.set_page_config(
     page_title="Nimbus | Financial Intelligence",
     page_icon=str(ICON_PATH),
@@ -21,6 +22,11 @@ st.set_page_config(
 )
 
 show_loading_screen()
+
+if st.session_state.get("history_detail_active"):
+    from features.recent_history import show_history_detail_page
+    show_history_detail_page()
+    st.stop()
 
 st.markdown(
     """

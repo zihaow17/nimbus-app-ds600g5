@@ -18,25 +18,73 @@ HISTORY_DIR = PROJECT_ROOT / ".cache" / "nimbus"
 HISTORY_PATH = HISTORY_DIR / "search_history.csv"
 
 
+def _write_history_header() -> None:
+    """Write the current schema header to the local history file."""
+    with HISTORY_PATH.open("w", newline="", encoding="utf-8") as csv_file:
+        writer = csv.writer(csv_file)
+        writer.writerow([
+            "user_id",
+            "timestamp_utc",
+            "search_type",
+            "primary_ticker",
+            "secondary_ticker",
+            "primary_name",
+            "secondary_name",
+        ])
+
+
+def _migrate_legacy_history_file() -> None:
+    """Upgrade older CSV files that do not yet include a user_id column."""
+    if not HISTORY_PATH.exists():
+        _write_history_header()
+        return
+
+    with HISTORY_PATH.open("r", newline="", encoding="utf-8") as csv_file:
+        rows = list(csv.reader(csv_file))
+
+    if not rows:
+        _write_history_header()
+        return
+
+    if rows[0] and rows[0][0].strip().lower() == "user_id":
+        return
+
+    migrated_rows: list[list[str]] = []
+    for row in rows[1:]:
+        if not row:
+            continue
+        normalized = ["", *row[:6]]
+        while len(normalized) < 7:
+            normalized.append("")
+        migrated_rows.append(normalized[:7])
+
+    with HISTORY_PATH.open("w", newline="", encoding="utf-8") as csv_file:
+        writer = csv.writer(csv_file)
+        writer.writerow([
+            "user_id",
+            "timestamp_utc",
+            "search_type",
+            "primary_ticker",
+            "secondary_ticker",
+            "primary_name",
+            "secondary_name",
+        ])
+        writer.writerows(migrated_rows)
+
+
 def _ensure_history_file() -> Path:
     """Create the local history directory and CSV header when needed."""
     HISTORY_DIR.mkdir(parents=True, exist_ok=True)
     if not HISTORY_PATH.exists():
-        with HISTORY_PATH.open("w", newline="", encoding="utf-8") as csv_file:
-            writer = csv.writer(csv_file)
-            writer.writerow([
-                "timestamp_utc",
-                "search_type",
-                "primary_ticker",
-                "secondary_ticker",
-                "primary_name",
-                "secondary_name",
-            ])
+        _write_history_header()
+    else:
+        _migrate_legacy_history_file()
     return HISTORY_PATH
 
 
 def _normalize_history_entry(row: dict[str, str]) -> dict[str, str] | None:
     """Convert a stored CSV row into a display-ready search record."""
+    user_id = (row.get("user_id") or "").strip()
     search_type = (row.get("search_type") or "").strip().lower()
     primary_ticker = (row.get("primary_ticker") or "").strip().upper()
     secondary_ticker = (row.get("secondary_ticker") or "").strip().upper()
@@ -48,6 +96,7 @@ def _normalize_history_entry(row: dict[str, str]) -> dict[str, str] | None:
         if not primary_ticker:
             return None
         return {
+            "user_id": user_id,
             "timestamp": timestamp,
             "search_type": "Company search",
             "company_name": primary_name or primary_ticker,
@@ -64,6 +113,7 @@ def _normalize_history_entry(row: dict[str, str]) -> dict[str, str] | None:
         name_one = primary_name or primary_ticker or "Unknown company"
         name_two = secondary_name or secondary_ticker or "Unknown company"
         return {
+            "user_id": user_id,
             "timestamp": timestamp,
             "search_type": "Company comparison",
             "company_name": f"{name_one} vs {name_two}",
@@ -83,6 +133,7 @@ def record_search(
     secondary_ticker: str | None = None,
     primary_name: str = "",
     secondary_name: str = "",
+    user_id: str | None = None,
 ) -> Path:
     """Append a single search to the local CSV history file."""
     primary = (primary_ticker or "").strip().upper()
@@ -98,6 +149,7 @@ def record_search(
     with file_path.open("a", newline="", encoding="utf-8") as csv_file:
         writer = csv.writer(csv_file)
         writer.writerow([
+            (user_id or "").strip(),
             timestamp,
             normalized_type,
             primary,
@@ -109,13 +161,14 @@ def record_search(
     return file_path
 
 
-def load_history() -> pd.DataFrame:
+def load_history(user_id: str | None = None) -> pd.DataFrame:
     """Read locally saved searches and return a DataFrame for the UI."""
     file_path = _ensure_history_file()
     rows: list[dict[str, str]] = []
 
     if not file_path.exists():
         return pd.DataFrame(columns=[
+            "user_id",
             "timestamp",
             "search_type",
             "company_name",
@@ -131,11 +184,18 @@ def load_history() -> pd.DataFrame:
         for row in reader:
             if not row:
                 continue
+            if user_id is not None:
+                stored_user_id = (row.get("user_id") or "").strip()
+                if stored_user_id and stored_user_id != user_id:
+                    continue
+                if not stored_user_id and row.get("timestamp_utc"):
+                    continue
             normalized = _normalize_history_entry(row)
             if normalized is not None:
                 rows.append(normalized)
 
     frame = pd.DataFrame(rows, columns=[
+        "user_id",
         "timestamp",
         "search_type",
         "company_name",
