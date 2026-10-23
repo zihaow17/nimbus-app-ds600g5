@@ -4,7 +4,6 @@ from pathlib import Path
 
 import streamlit as st
 
-from auth import validate_login
 from features.company_comparison import show_company_comparison
 from features.loading_screen import show_loading_screen
 from features.company_search import show_company_search_page
@@ -15,48 +14,12 @@ PROJECT_ROOT = Path(__file__).resolve().parent.parent
 ICON_PATH = PROJECT_ROOT / "assets" / "nimbus-logo-icon.png"
 
 
-def show_login_screen() -> None:
-    """Render the local mock login form before the main dashboard loads."""
-    st.markdown(
-        """
-        <div style="max-width: 420px; margin: 3rem auto 0;">
-            <h2 style="text-align:center; color:#f0f1ef;">Nimbus Login</h2>
-        </div>
-        """,
-        unsafe_allow_html=True,
-    )
-
-    with st.form("login_form"):
-        user_id = st.text_input("User ID", placeholder="Enter your user ID")
-        password = st.text_input("Password", type="password", placeholder="Enter your password")
-        submitted = st.form_submit_button("Log in")
-
-    if submitted:
-        user = validate_login(user_id, password)
-        if user is None:
-            st.error("Invalid log in")
-            return
-
-        st.session_state["logged_in"] = True
-        st.session_state["current_user_id"] = user["user_id"]
-        st.session_state["current_user_name"] = user["display_name"]
-        st.rerun()
-
-
 st.set_page_config(
     page_title="Nimbus | Financial Intelligence",
     page_icon=str(ICON_PATH),
     layout="wide",
     initial_sidebar_state="collapsed",
 )
-
-if "logged_in" not in st.session_state:
-    st.session_state["logged_in"] = False
-
-if not st.session_state["logged_in"]:
-    show_loading_screen()
-    show_login_screen()
-    st.stop()
 
 show_loading_screen()
 

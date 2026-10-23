@@ -5,6 +5,7 @@
 Nimbus is a Streamlit dashboard for exploring public company financial data. It retrieves market, statement, news, and analyst information from Yahoo Finance through `yfinance`. Local use still requires an internet connection for those data requests.
 
 The app can run locally or be deployed to AWS with the CloudFormation template in `scripts/nimbus-aws.yaml`.
+The demo has no login or user separation: search history is shared by everyone using the same app instance. Do not expose a deployment publicly unless access is restricted at the network or hosting layer.
 
 ## Application Pages
 

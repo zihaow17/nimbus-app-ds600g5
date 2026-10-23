@@ -54,7 +54,7 @@ def show_history_detail_page() -> None:
 def show_recent_history_page() -> None:
     """Render recent searches in timestamp order with five-row expansion."""
     st.markdown('<h2 class="content-section-title">Recently Viewed</h2>', unsafe_allow_html=True)
-    history = load_history(user_id=st.session_state.get("current_user_id"))
+    history = load_history()
     if history.empty:
         st.info("No recent searches yet.")
         return

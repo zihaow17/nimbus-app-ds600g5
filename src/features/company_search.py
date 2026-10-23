@@ -57,7 +57,6 @@ def _run_single_search(ticker: str, analysis_type: str) -> None:
             "single",
             ticker,
             primary_name=company_name,
-            user_id=st.session_state.get("current_user_id"),
         )
     except Exception as error:
         st.error(f"Could not load data for {ticker}. Check the symbol and try again.")

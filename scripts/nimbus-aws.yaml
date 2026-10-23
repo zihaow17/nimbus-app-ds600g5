@@ -13,7 +13,7 @@ Parameters:
   GitHubRepoUrl:
     Type: String
     Description: Git repository URL for the Nimbus app to clone onto the EC2 instance.
-    Default: https://github.com/your-org/nimbus-app-ds600g5.git
+    Default: https://github.com/zihaow17/nimbus-app-ds600g5.git
 
   KeyPairName:
     Type: AWS::EC2::KeyPair::KeyName
