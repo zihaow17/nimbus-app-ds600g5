@@ -3,6 +3,7 @@ from datetime import datetime, timezone
 from pathlib import Path
 from html import escape
 import math
+from typing import Optional
 
 import pandas as pd
 import streamlit as st
@@ -253,7 +254,7 @@ def _comparison(t1, i1, t2, i2):
         st.warning(f"Currencies differ ({c1} versus {c2}); values are not FX-converted.")
 
 
-def show_company_comparison(ticker1: str | None = None, ticker2: str | None = None):
+def show_company_comparison(ticker1: Optional[str] = None, ticker2: Optional[str] = None):
     """Render the complete Nimbus comparison interface."""
     if st.session_state.get("history_detail_active"):
         back_col, _ = st.columns([1, 6])
