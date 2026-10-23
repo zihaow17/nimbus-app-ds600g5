@@ -10,6 +10,7 @@ from __future__ import annotations
 import csv
 from datetime import datetime, timezone
 from pathlib import Path
+from typing import Optional
 
 import pandas as pd
 
@@ -82,7 +83,7 @@ def _ensure_history_file() -> Path:
     return HISTORY_PATH
 
 
-def _normalize_history_entry(row: dict[str, str]) -> dict[str, str] | None:
+def _normalize_history_entry(row: dict[str, str]) -> Optional[dict[str, str]]:
     """Convert a stored CSV row into a display-ready search record."""
     user_id = (row.get("user_id") or "").strip()
     search_type = (row.get("search_type") or "").strip().lower()
@@ -130,10 +131,10 @@ def _normalize_history_entry(row: dict[str, str]) -> dict[str, str] | None:
 def record_search(
     search_type: str,
     primary_ticker: str,
-    secondary_ticker: str | None = None,
+    secondary_ticker: Optional[str] = None,
     primary_name: str = "",
     secondary_name: str = "",
-    user_id: str | None = None,
+    user_id: Optional[str] = None,
 ) -> Path:
     """Append a single search to the local CSV history file."""
     primary = (primary_ticker or "").strip().upper()
@@ -161,7 +162,7 @@ def record_search(
     return file_path
 
 
-def load_history(user_id: str | None = None) -> pd.DataFrame:
+def load_history(user_id: Optional[str] = None) -> pd.DataFrame:
     """Read locally saved searches and return a DataFrame for the UI."""
     file_path = _ensure_history_file()
     rows: list[dict[str, str]] = []

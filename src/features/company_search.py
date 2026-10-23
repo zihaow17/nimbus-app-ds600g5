@@ -2,6 +2,7 @@
 
 import base64
 from pathlib import Path
+from typing import Optional
 
 import streamlit as st
 import yfinance as yf
@@ -99,7 +100,7 @@ def _render_search_results() -> None:
             st.dataframe(ratings, use_container_width=True)
 
 
-def show_company_search_page(initial_ticker: str | None = None, auto_search: bool = False) -> None:
+def show_company_search_page(initial_ticker: Optional[str] = None, auto_search: bool = False) -> None:
     """Render the company search form and any retained search results."""
     if st.session_state.get("history_detail_active"):
         back_col, _ = st.columns([1, 6])
