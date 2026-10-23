@@ -12,19 +12,19 @@ The demo has no login or user separation: search history is shared by everyone u
 The top navigation contains four pages:
 
 - **Company Search**: Search a ticker for financial statements, recent news, or stock price and analyst ratings. Successful results remain available when switching pages during the session.
+- **Favourite Companies**: Click one of the fixed AAPL, NVDA, or MU cards below the search form to view its latest stock price and analyst ratings.
 - **Company Comparison**: Compare two companies' prices and financial metrics.
-- **Favourites**: Placeholder page; saving and managing favourites is not implemented yet.
 - **Recently Viewed**: Review saved search records, shown five at a time with a Show more control.
 
-Search history is temporarily stored in `.cache/nimbus/search_history.csv`. It contains search metadata such as tickers, company names, and timestamps, not downloaded financial datasets. The cache is local to the machine and is excluded from Git.
+Search history is temporarily stored in `.cache/nimbus/search_history.csv`. New single-company searches save their displayed results alongside search metadata so they can be reopened in a read-only dialog. Older records show stock price and analyst ratings by retrieving them when opened. Comparison history displays matching comparison data cached in the current Streamlit session when available. The cache is local to the machine and is excluded from Git.
 
 ## Project Structure
 
 - `src/app.py`: Streamlit entry point, shared page styling, and navigation.
 - `src/analysis.py`: Shared Yahoo Finance data-access functions.
 - `src/features/company_search.py`: Company Search page and result rendering.
+- `src/features/favourites.py`: Fixed favourite-company cards and cached price lookup.
 - `src/features/company_comparison.py`: Company Comparison page, metrics, and Plotly chart.
-- `src/features/favourites.py`: Favourites placeholder page.
 - `src/features/history.py`: Local CSV search-history persistence and normalization.
 - `src/features/recent_history.py`: Recently Viewed page and five-row expansion.
 - `assets/`: Nimbus logos and optional company logos.

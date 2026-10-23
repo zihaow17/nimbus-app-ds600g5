@@ -2,12 +2,12 @@
 
 import base64
 from pathlib import Path
-from typing import Optional
 
 import streamlit as st
 import yfinance as yf
 
 from analysis import get_analyst_ratings, get_financials, get_news, get_price
+from features.favourites import show_favourite_companies
 from features.history import record_search
 
 PROJECT_ROOT = Path(__file__).resolve().parents[2]
@@ -58,15 +58,16 @@ def _run_single_search(ticker: str, analysis_type: str) -> None:
             "single",
             ticker,
             primary_name=company_name,
+            analysis_type=analysis_type,
+            result=st.session_state[RESULTS_KEY],
         )
     except Exception as error:
         st.error(f"Could not load data for {ticker}. Check the symbol and try again.")
         st.caption(f"Details: {error}")
 
 
-def _render_search_results() -> None:
-    """Render the most recent successful search stored in session state."""
-    result = st.session_state.get(RESULTS_KEY)
+def render_search_result(result: dict) -> None:
+    """Render a stored company-search result without rendering search controls."""
     if not result:
         return
 
@@ -100,19 +101,26 @@ def _render_search_results() -> None:
             st.dataframe(ratings, use_container_width=True)
 
 
-def show_company_search_page(initial_ticker: Optional[str] = None, auto_search: bool = False) -> None:
-    """Render the company search form and any retained search results."""
-    if st.session_state.get("history_detail_active"):
-        back_col, _ = st.columns([1, 6])
-        with back_col:
-            if st.button("<- Back", key="history_detail_company_search_back"):
-                st.session_state["history_detail_active"] = False
-                st.session_state["history_detail_record"] = {}
-                st.session_state["history_detail_search_ran"] = False
-                st.session_state["nimbus_page"] = "Recently Viewed"
-                st.session_state["nimbus_page_mobile"] = "Recently Viewed"
-                st.rerun()
+def _render_search_results() -> None:
+    """Render the most recent successful search stored in session state."""
+    result = st.session_state.get(RESULTS_KEY)
+    if result:
+        render_search_result(result)
 
+
+def show_company_search_page() -> None:
+    """Render the company search form and any retained search results."""
+    st.markdown(
+        """
+        <style>
+        .st-key-company-search-bar {
+            margin: 0 auto;
+            max-width: 620px;
+        }
+        </style>
+        """,
+        unsafe_allow_html=True,
+    )
     st.markdown(
         f"""
         <section class="hero">
@@ -124,18 +132,23 @@ def show_company_search_page(initial_ticker: Optional[str] = None, auto_search: 
         unsafe_allow_html=True,
     )
 
-    with st.form("analysis_form"):
+    with st.container(key="company-search-bar"):
         ticker = st.text_input(
             "Company or ticker",
-            value=(initial_ticker or "").strip().upper(),
             placeholder="🔍  Search company or ticker",
             label_visibility="collapsed",
             help="Enter a ticker symbol, for example AAPL or MSFT.",
+            key="company_search_ticker",
         )
         st.caption("e.g. Apple, AAPL, Microsoft, MSFT")
+
+    selected_favourite = show_favourite_companies()
+
+    with st.form("analysis_form"):
         analysis_type = st.selectbox(
             "Data to explore",
             ("filings", "news", "stock price ratings"),
+            label_visibility="collapsed",
             format_func=lambda value: {
                 "filings": "Financial statements",
                 "news": "Recent news",
@@ -146,12 +159,10 @@ def show_company_search_page(initial_ticker: Optional[str] = None, auto_search: 
         with button_center:
             run_analysis = st.form_submit_button("Search")
 
-    if auto_search and initial_ticker and not st.session_state.get("history_detail_search_ran"):
-        st.session_state["history_detail_search_ran"] = initial_ticker.strip().upper()
-        _run_single_search(initial_ticker.strip().upper(), "stock price ratings")
+    if selected_favourite:
+        _run_single_search(selected_favourite, "stock price ratings")
 
     if run_analysis:
-        st.session_state["history_detail_search_ran"] = False
         _run_single_search(ticker, analysis_type)
 
     _render_search_results()

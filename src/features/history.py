@@ -9,6 +9,8 @@ from __future__ import annotations
 
 import csv
 from datetime import datetime, timezone
+from io import StringIO
+import json
 from pathlib import Path
 from typing import Optional
 
@@ -17,25 +19,58 @@ import pandas as pd
 PROJECT_ROOT = Path(__file__).resolve().parents[2]
 HISTORY_DIR = PROJECT_ROOT / ".cache" / "nimbus"
 HISTORY_PATH = HISTORY_DIR / "search_history.csv"
+HISTORY_COLUMNS = [
+    "user_id",
+    "timestamp_utc",
+    "search_type",
+    "primary_ticker",
+    "secondary_ticker",
+    "primary_name",
+    "secondary_name",
+    "analysis_type",
+    "result_json",
+]
+
+
+def _encode_result_value(value):
+    if isinstance(value, pd.DataFrame):
+        return {"__dataframe__": value.to_json(orient="split", date_format="iso")}
+    if isinstance(value, dict):
+        return {key: _encode_result_value(item) for key, item in value.items()}
+    if isinstance(value, list):
+        return [_encode_result_value(item) for item in value]
+    return value
+
+
+def _decode_result_value(value):
+    if isinstance(value, dict) and set(value) == {"__dataframe__"}:
+        return pd.read_json(StringIO(value["__dataframe__"]), orient="split")
+    if isinstance(value, dict):
+        return {key: _decode_result_value(item) for key, item in value.items()}
+    if isinstance(value, list):
+        return [_decode_result_value(item) for item in value]
+    return value
+
+
+def _serialize_result(result) -> str:
+    return json.dumps(_encode_result_value(result), separators=(",", ":")) if result is not None else ""
+
+
+def _deserialize_result(result_json: str):
+    if not result_json:
+        return None
+    return _decode_result_value(json.loads(result_json))
 
 
 def _write_history_header() -> None:
     """Write the current schema header to the local history file."""
     with HISTORY_PATH.open("w", newline="", encoding="utf-8") as csv_file:
         writer = csv.writer(csv_file)
-        writer.writerow([
-            "user_id",
-            "timestamp_utc",
-            "search_type",
-            "primary_ticker",
-            "secondary_ticker",
-            "primary_name",
-            "secondary_name",
-        ])
+        writer.writerow(HISTORY_COLUMNS)
 
 
 def _migrate_legacy_history_file() -> None:
-    """Upgrade older CSV files that do not yet include a user_id column."""
+    """Upgrade older history CSV schemas while preserving their stored rows."""
     if not HISTORY_PATH.exists():
         _write_history_header()
         return
@@ -47,29 +82,27 @@ def _migrate_legacy_history_file() -> None:
         _write_history_header()
         return
 
-    if rows[0] and rows[0][0].strip().lower() == "user_id":
+    if [column.strip().lower() for column in rows[0]] == HISTORY_COLUMNS:
         return
 
-    migrated_rows: list[list[str]] = []
+    old_columns = [column.strip().lower() for column in rows[0]]
+    if old_columns and old_columns[0].lower() != "user_id":
+        old_columns = ["user_id", *old_columns]
+
+    migrated_rows = []
     for row in rows[1:]:
         if not row:
             continue
-        normalized = ["", *row[:6]]
-        while len(normalized) < 7:
-            normalized.append("")
-        migrated_rows.append(normalized[:7])
+        if old_columns[0] == "user_id" and len(row) == len(old_columns) - 1:
+            row = ["", *row]
+        if len(row) < len(old_columns):
+            row.extend([""] * (len(old_columns) - len(row)))
+        old_record = dict(zip(old_columns, row))
+        migrated_rows.append([old_record.get(column, "") for column in HISTORY_COLUMNS])
 
     with HISTORY_PATH.open("w", newline="", encoding="utf-8") as csv_file:
         writer = csv.writer(csv_file)
-        writer.writerow([
-            "user_id",
-            "timestamp_utc",
-            "search_type",
-            "primary_ticker",
-            "secondary_ticker",
-            "primary_name",
-            "secondary_name",
-        ])
+        writer.writerow(HISTORY_COLUMNS)
         writer.writerows(migrated_rows)
 
 
@@ -92,6 +125,10 @@ def _normalize_history_entry(row: dict[str, str]) -> Optional[dict[str, str]]:
     primary_name = (row.get("primary_name") or "").strip()
     secondary_name = (row.get("secondary_name") or "").strip()
     timestamp = (row.get("timestamp_utc") or "").strip()
+    analysis_type = (row.get("analysis_type") or "").strip().lower()
+    if analysis_type not in {"filings", "news", "stock price ratings"}:
+        analysis_type = "stock price ratings"
+    result = _deserialize_result((row.get("result_json") or "").strip())
 
     if search_type == "single":
         if not primary_ticker:
@@ -106,6 +143,8 @@ def _normalize_history_entry(row: dict[str, str]) -> Optional[dict[str, str]]:
             "secondary_ticker": "",
             "primary_name": primary_name,
             "secondary_name": "",
+            "analysis_type": analysis_type,
+            "result": result,
         }
 
     if search_type == "comparison":
@@ -123,6 +162,8 @@ def _normalize_history_entry(row: dict[str, str]) -> Optional[dict[str, str]]:
             "secondary_ticker": secondary_ticker,
             "primary_name": primary_name,
             "secondary_name": secondary_name,
+            "analysis_type": "comparison",
+            "result": result,
         }
 
     return None
@@ -135,6 +176,8 @@ def record_search(
     primary_name: str = "",
     secondary_name: str = "",
     user_id: Optional[str] = None,
+    analysis_type: str = "",
+    result=None,
 ) -> Path:
     """Append a single search to the local CSV history file."""
     primary = (primary_ticker or "").strip().upper()
@@ -157,6 +200,8 @@ def record_search(
             secondary,
             (primary_name or "").strip(),
             (secondary_name or "").strip(),
+            (analysis_type or "").strip().lower(),
+            _serialize_result(result),
         ])
 
     return file_path
@@ -178,6 +223,8 @@ def load_history(user_id: Optional[str] = None) -> pd.DataFrame:
             "secondary_ticker",
             "primary_name",
             "secondary_name",
+            "analysis_type",
+            "result",
         ])
 
     with file_path.open("r", newline="", encoding="utf-8") as csv_file:
@@ -205,6 +252,8 @@ def load_history(user_id: Optional[str] = None) -> pd.DataFrame:
         "secondary_ticker",
         "primary_name",
         "secondary_name",
+        "analysis_type",
+        "result",
     ])
     if frame.empty:
         return frame
