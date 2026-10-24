@@ -7,6 +7,7 @@ import streamlit as st
 from features.company_comparison import show_company_comparison
 from features.loading_screen import show_loading_screen
 from features.company_search import show_company_search_page
+from features.notes import show_notes_feature
 from features.recent_history import show_recent_history_page
 
 PROJECT_ROOT = Path(__file__).resolve().parent.parent
@@ -351,3 +352,5 @@ elif selected_page == "Company Comparison":
     show_company_comparison()
 else:
     show_recent_history_page()
+
+show_notes_feature()
