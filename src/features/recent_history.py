@@ -1,8 +1,13 @@
-"""Recently viewed history page."""
+"""Recently viewed history page and read-only result dialog."""
+
+from datetime import datetime, timezone
 
 import pandas as pd
 import streamlit as st
 
+from analysis import get_analyst_ratings, get_news, get_price
+from features.company_comparison import get_cached_comparison, show_cached_comparison
+from features.company_search import render_search_result
 from features.history import load_history
 
 
@@ -12,8 +17,75 @@ def _show_more_history(total_rows: int) -> None:
     st.session_state["recent_history_visible_count"] = min(visible_count + 5, total_rows)
 
 
+def _format_timestamp(timestamp: str) -> str:
+    parsed = pd.to_datetime(timestamp, errors="coerce", utc=True)
+    if pd.isna(parsed):
+        return "Timestamp unavailable"
+    return parsed.tz_convert("Asia/Singapore").strftime("%Y-%m-%d %H:%M SGT")
+
+
+def _load_history_record(record: dict) -> None:
+    """Select a history item and attach matching in-session comparison data."""
+    selected = dict(record)
+    if selected.get("search_type") == "Company comparison":
+        selected["comparison_cache"] = get_cached_comparison(
+            selected.get("primary_ticker", ""),
+            selected.get("secondary_ticker", ""),
+        )
+    st.session_state["history_popup_record"] = selected
+
+
+def _fetch_legacy_single_result(record: dict) -> tuple[dict, str]:
+    """Load a legacy record's default price-and-ratings view on demand."""
+    ticker = record["primary_ticker"]
+    result = {
+        "ticker": ticker,
+        "company_name": record.get("primary_name") or ticker,
+        "analysis_type": "stock price ratings",
+        "price": get_price(ticker),
+        "ratings": get_analyst_ratings(ticker),
+    }
+    retrieved_at = datetime.now(timezone.utc).strftime("%Y-%m-%d %H:%M UTC")
+    return result, retrieved_at
+
+
+@st.dialog("Search result", width="large", dismissible=False)
+def _show_history_result_dialog(record: dict) -> None:
+    """Show a saved result without exposing search controls."""
+    if record.get("search_type") == "Company comparison":
+        primary_name = record.get("primary_name") or record.get("primary_ticker", "")
+        secondary_name = record.get("secondary_name") or record.get("secondary_ticker", "")
+        st.subheader(f"{primary_name} vs {secondary_name}")
+        st.caption(f"{record.get('primary_ticker', '')} vs {record.get('secondary_ticker', '')}")
+        show_cached_comparison(record.get("comparison_cache"))
+    else:
+        ticker = record.get("primary_ticker") or record.get("ticker_value") or ""
+        company_name = record.get("primary_name") or record.get("company_name") or ticker
+        result = record.get("result")
+        if result is not None:
+            retrieved_at = _format_timestamp(record.get("timestamp", ""))
+        else:
+            try:
+                with st.spinner(f"Loading saved result for {ticker}..."):
+                    result, retrieved_at = _fetch_legacy_single_result(record)
+            except Exception as error:
+                st.error(f"Could not load data for {ticker}.")
+                st.caption(f"Details: {error}")
+                result = None
+                retrieved_at = "Timestamp unavailable"
+
+        st.subheader(f"{company_name} ({ticker})")
+        st.caption(f"Data retrieved: {retrieved_at}")
+        if result is not None:
+            render_search_result(result)
+
+    if st.button("Back", key="history_result_dialog_back"):
+        st.session_state["history_popup_record"] = None
+        st.rerun(scope="app")
+
+
 def show_recent_history_page() -> None:
-    """Render recent searches in timestamp order with five-row expansion."""
+    """Render recent searches and open their results in a modal dialog."""
     st.markdown('<h2 class="content-section-title">Recently Viewed</h2>', unsafe_allow_html=True)
     history = load_history()
     if history.empty:
@@ -21,42 +93,40 @@ def show_recent_history_page() -> None:
         return
 
     history = history.sort_values("timestamp", ascending=False, kind="mergesort").reset_index(drop=True)
-    table = history[["search_type", "company_name", "ticker_value", "timestamp"]].copy()
-    table.rename(
-        columns={
-            "search_type": "Type",
-            "company_name": "Company / Companies",
-            "ticker_value": "Ticker(s)",
-            "timestamp": "Timestamp",
-        },
-        inplace=True,
-    )
-    table["Timestamp"] = pd.to_datetime(table["Timestamp"], errors="coerce", utc=True).dt.tz_convert("Asia/Singapore").dt.strftime("%Y-%m-%d %H:%M SGT")
-
     if "recent_history_visible_count" not in st.session_state:
         st.session_state["recent_history_visible_count"] = 5
 
-    total_rows = len(table)
+    total_rows = len(history)
     visible_count = min(st.session_state["recent_history_visible_count"], total_rows)
-    visible_table = table.head(visible_count)
+    visible_history = history.head(visible_count)
 
     header_cols = st.columns([1.5, 2.8, 1.6, 1.8, 0.9], vertical_alignment="center")
-    headers = ["Type", "Company / Companies", "Ticker(s)", "Timestamp", "Reload"]
+    headers = ["Type", "Company / Companies", "Ticker(s)", "Timestamp", "View"]
     for column, label in zip(header_cols, headers):
         with column:
             st.markdown(f"<div class='recent-history-header'>{label}</div>", unsafe_allow_html=True)
 
     st.markdown("<div class='recent-history-row-gap recent-history-row-gap-header'></div>", unsafe_allow_html=True)
 
-    for _, row in visible_table.iterrows():
+    for row_index, (_, row) in enumerate(visible_history.iterrows()):
         columns = st.columns([1.5, 2.8, 1.6, 1.8, 0.9], vertical_alignment="center")
-        values = [row["Type"], row["Company / Companies"], row["Ticker(s)"], row["Timestamp"], ""]
-        for column, value in zip(columns, values):
+        values = [
+            row["search_type"],
+            row["company_name"],
+            row["ticker_value"],
+            _format_timestamp(row["timestamp"]),
+        ]
+        for column, value in zip(columns[:4], values):
             with column:
-                if value == "":
-                    st.markdown("<div class='recent-history-button-wrap'><button class='recent-history-reload' disabled>Reload</button></div>", unsafe_allow_html=True)
-                else:
-                    st.markdown(f"<div class='recent-history-cell'>{value}</div>", unsafe_allow_html=True)
+                st.markdown(f"<div class='recent-history-cell'>{value}</div>", unsafe_allow_html=True)
+        with columns[4]:
+            st.button(
+                "View",
+                key=f"history_view_{row_index}",
+                use_container_width=True,
+                on_click=_load_history_record,
+                args=(row.to_dict(),),
+            )
         st.markdown("<div class='recent-history-row-gap'></div>", unsafe_allow_html=True)
 
     if total_rows > visible_count:
@@ -66,3 +136,7 @@ def show_recent_history_page() -> None:
             on_click=_show_more_history,
             args=(total_rows,),
         )
+
+    selected_record = st.session_state.get("history_popup_record")
+    if selected_record:
+        _show_history_result_dialog(selected_record)

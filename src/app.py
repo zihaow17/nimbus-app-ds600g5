@@ -7,11 +7,12 @@ import streamlit as st
 from features.company_comparison import show_company_comparison
 from features.loading_screen import show_loading_screen
 from features.company_search import show_company_search_page
-from features.favourites import show_favourites_page
+from features.notes import show_notes_feature
 from features.recent_history import show_recent_history_page
 
 PROJECT_ROOT = Path(__file__).resolve().parent.parent
 ICON_PATH = PROJECT_ROOT / "assets" / "nimbus-logo-icon.png"
+
 
 st.set_page_config(
     page_title="Nimbus | Financial Intelligence",
@@ -313,7 +314,7 @@ with settings_column:
     st.markdown('<div class="topbar-action">⚙</div>', unsafe_allow_html=True)
 
 st.markdown('<div class="header-rule"></div>', unsafe_allow_html=True)
-page_options = ("Company Search", "Company Comparison", "Favourites", "Recently Viewed")
+page_options = ("Company Search", "Company Comparison", "Recently Viewed")
 
 
 def _sync_mobile_page() -> None:
@@ -322,6 +323,8 @@ def _sync_mobile_page() -> None:
 
 
 if "nimbus_page" not in st.session_state:
+    st.session_state["nimbus_page"] = page_options[0]
+if st.session_state["nimbus_page"] not in page_options:
     st.session_state["nimbus_page"] = page_options[0]
 if st.session_state.get("nimbus_page_mobile") != st.session_state["nimbus_page"]:
     st.session_state["nimbus_page_mobile"] = st.session_state["nimbus_page"]
@@ -347,7 +350,7 @@ if selected_page == "Company Search":
     show_company_search_page()
 elif selected_page == "Company Comparison":
     show_company_comparison()
-elif selected_page == "Favourites":
-    show_favourites_page()
 else:
     show_recent_history_page()
+
+show_notes_feature()
