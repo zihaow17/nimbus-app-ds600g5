@@ -8,6 +8,7 @@ import yfinance as yf
 
 from analysis import get_analyst_ratings, get_financials, get_news, get_price
 from features.history import record_search
+from features.company_overview import show_company_overview
 
 PROJECT_ROOT = Path(__file__).resolve().parents[2]
 WIDE_LOGO_PATH = PROJECT_ROOT / "assets" / "nimbus-logo-wide.png"
@@ -67,33 +68,10 @@ def _render_search_results() -> None:
 
     ticker = result["ticker"]
     analysis_type = result["analysis_type"]
-    if analysis_type == "filings":
-        for section, data in result["data"].items():
-            st.subheader(section)
-            if data.empty:
-                st.info(f"No {section.lower()} data was found for {ticker}.")
-            else:
-                st.dataframe(data, use_container_width=True)
-    elif analysis_type == "news":
-        st.subheader(f"Recent news for {ticker}")
-        articles = result["data"]
-        if articles.empty:
-            st.info(f"No recent news was found for {ticker}.")
-        else:
-            st.dataframe(articles, use_container_width=True, hide_index=True)
-    else:
-        st.subheader(f"Stock price and analyst ratings for {ticker}")
-        price = result["price"]
-        if price is None:
-            st.metric("Current price", "Not available")
-        else:
-            st.metric("Current price", f"${price:,.2f}")
-        ratings = result["ratings"]
-        if ratings.empty:
-            st.info(f"No analyst recommendations were found for {ticker}.")
-        else:
-            st.dataframe(ratings, use_container_width=True)
+    
 
+    st.divider()
+    show_company_overview(ticker)
 
 def show_company_search_page() -> None:
     """Render the company search form and any retained search results."""
