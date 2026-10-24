@@ -7,6 +7,7 @@ Each user-facing page or feature is implemented in its own module:
 - `company_comparison.py`: two-company metrics and price-history comparison.
 - `recent_history.py`: display of saved searches, five-row expansion, and read-only result dialogs.
 - `history.py`: shared CSV persistence and normalization, including saved single-search results.
+- `notes.py`: compact context-aware notes dialog with local SQLite persistence.
 
 `src/app.py` owns shared app configuration, styling, and page navigation. Shared
 Yahoo Finance data-access functions live in `src/analysis.py`. Local history is
