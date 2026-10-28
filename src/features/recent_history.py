@@ -7,7 +7,7 @@ import streamlit as st
 
 from analysis import get_analyst_ratings, get_news, get_price
 from features.company_comparison import get_cached_comparison, show_cached_comparison
-from features.company_search import render_search_result
+from features.company_search import RESULT_VIEW_OPTIONS, render_search_result
 from features.history import load_history
 
 
@@ -26,6 +26,7 @@ def _format_timestamp(timestamp: str) -> str:
 
 def _load_history_record(record: dict) -> None:
     """Select a history item and attach matching in-session comparison data."""
+    st.session_state["history_result_view"] = RESULT_VIEW_OPTIONS[0]
     selected = dict(record)
     if selected.get("search_type") == "Company comparison":
         selected["comparison_cache"] = get_cached_comparison(
@@ -77,7 +78,7 @@ def _show_history_result_dialog(record: dict) -> None:
         st.subheader(f"{company_name} ({ticker})")
         st.caption(f"Data retrieved: {retrieved_at}")
         if result is not None:
-            render_search_result(result)
+            render_search_result(result, selector_key="history_result_view")
 
     if st.button("Back", key="history_result_dialog_back"):
         st.session_state["history_popup_record"] = None

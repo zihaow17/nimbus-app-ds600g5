@@ -165,6 +165,10 @@ venv.bak/
 # Local temporary app cache
 .cache/
 
+# Local agent configuration
+/.agents/
+/.claude/
+
 # Reference materials
 /reference/
 
