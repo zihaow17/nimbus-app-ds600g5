@@ -11,11 +11,11 @@ The demo has no login or user separation: search history is shared by everyone u
 
 The top navigation contains three pages:
 
-- **Company Search**: Search a ticker for financial statements, recent news, or stock price and analyst ratings. Successful results remain available when switching pages during the session. A compact favourites row below the search bar shows AAPL, NVDA, and MU with prices cached for five minutes; clicking one runs its stock-price-and-analyst-ratings search.
+- **Company Search**: Search a ticker to fetch financial statements, recent news, stock price, and analyst ratings together. Use the result selector to navigate among the three views; stock price and analyst ratings is shown first by default, followed by financial statements and recent news. Successful results remain available when switching app pages during the session. A compact favourites row below the search bar shows AAPL, NVDA, and MU with prices cached for five minutes; clicking one fetches all three result views.
 - **Company Comparison**: Compare two companies' prices and financial metrics.
-- **Recently Viewed**: Review saved search records, shown five at a time with a Show more control. Select View to open a read-only result dialog. New single-company records retain the displayed result; older records fetch stock price and analyst ratings when opened. Comparison records show matching data cached in the current app session, when available.
+- **Recently Viewed**: Review saved search records, shown five at a time with a Show more control. Select View to open a read-only result dialog. New single-company records retain all three fetched datasets; older records fetch stock price and analyst ratings when opened. Comparison records show matching data cached in the current app session, when available.
 
-Search history is temporarily stored in `.cache/nimbus/search_history.csv`. It includes search metadata and, for new single-company searches, serialized result data. The cache is local to the machine and is excluded from Git.
+Search history is temporarily stored in `.cache/nimbus/search_history.csv`. It includes search metadata and, for new single-company searches, all three serialized result datasets. Older records retain their originally saved result. The cache is local to the machine and is excluded from Git.
 
 ## Project Structure
 

@@ -126,7 +126,7 @@ def _normalize_history_entry(row: dict[str, str]) -> Optional[dict[str, str]]:
     secondary_name = (row.get("secondary_name") or "").strip()
     timestamp = (row.get("timestamp_utc") or "").strip()
     analysis_type = (row.get("analysis_type") or "").strip().lower()
-    if analysis_type not in {"filings", "news", "stock price ratings"}:
+    if analysis_type not in {"all", "filings", "news", "stock price ratings"}:
         analysis_type = "stock price ratings"
     result = _deserialize_result((row.get("result_json") or "").strip())
 
