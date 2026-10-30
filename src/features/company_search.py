@@ -213,6 +213,11 @@ def _run_single_search(ticker):
             analysis_type="all",
             result=result,
         )
+        st.session_state["current_history_id"] = history_id
+        st.session_state["notes_history_editor_open"] = False
+        st.session_state["notes_pending_context"] = None
+        st.session_state["notes_active_id"] = None
+        st.session_state["notes_draft"] = False
     except Exception as error:
         st.caption(f"Search history could not be saved: {error}")
 

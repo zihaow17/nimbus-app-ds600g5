@@ -9,6 +9,7 @@ from analysis import get_analyst_ratings, get_news, get_price
 from features.company_comparison import get_cached_comparison, show_cached_comparison
 from features.company_search import RESULT_VIEW_OPTIONS, render_search_result
 from features.history import load_history
+from features.notes import get_history_note_count, show_notes_for_history_record
 
 
 def _show_more_history(total_rows: int) -> None:
@@ -102,7 +103,7 @@ def show_recent_history_page() -> None:
     visible_history = history.head(visible_count)
 
     header_cols = st.columns([1.5, 2.8, 1.6, 1.8, 0.9], vertical_alignment="center")
-    headers = ["Type", "Company / Companies", "Ticker(s)", "Timestamp", "View"]
+    headers = ["Type", "Company / Companies", "Ticker(s)", "Timestamp", "View", "Notes"]
     for column, label in zip(header_cols, headers):
         with column:
             st.markdown(f"<div class='recent-history-header'>{label}</div>", unsafe_allow_html=True)
@@ -110,7 +111,7 @@ def show_recent_history_page() -> None:
     st.markdown("<div class='recent-history-row-gap recent-history-row-gap-header'></div>", unsafe_allow_html=True)
 
     for row_index, (_, row) in enumerate(visible_history.iterrows()):
-        columns = st.columns([1.5, 2.8, 1.6, 1.8, 0.9], vertical_alignment="center")
+        columns = st.columns([1.5, 2.8, 1.6, 1.8, 0.9, 0.9], vertical_alignment="center")
         values = [
             row["search_type"],
             row["company_name"],
@@ -126,6 +127,17 @@ def show_recent_history_page() -> None:
                 key=f"history_view_{row_index}",
                 use_container_width=True,
                 on_click=_load_history_record,
+                args=(row.to_dict(),),
+            )
+        with columns[5]:
+            note_count = get_history_note_count(row.to_dict())
+            notes_label = f"Notes ({note_count})" if note_count else "Notes"
+            st.button(
+                notes_label,
+                key=f"history_notes_{row_index}",
+                use_container_width=True,
+                disabled=note_count == 0,
+                on_click=show_notes_for_history_record,
                 args=(row.to_dict(),),
             )
         st.markdown("<div class='recent-history-row-gap'></div>", unsafe_allow_html=True)

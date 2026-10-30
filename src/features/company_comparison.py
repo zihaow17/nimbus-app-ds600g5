@@ -285,13 +285,18 @@ def show_company_comparison(ticker1: str | None = None, ticker2: str | None = No
             except Exception as exc:
                 st.error(f"Could not retrieve company information: {exc}")
                 return
-        record_search(
+        history_id = record_search(
             "comparison",
             ticker1_value,
             ticker2_value,
             primary_name=(info1.get("shortName") or info1.get("longName") or ticker1_value),
             secondary_name=(info2.get("shortName") or info2.get("longName") or ticker2_value),
         )
+        st.session_state["current_history_id"] = history_id
+        st.session_state["notes_history_editor_open"] = False
+        st.session_state["notes_pending_context"] = None
+        st.session_state["notes_active_id"] = None
+        st.session_state["notes_draft"] = False
         st.session_state["nimbus_comparison_results"] = (ticker1_value, info1, ticker2_value, info2)
 
     data = st.session_state.get("nimbus_comparison_results")
@@ -304,13 +309,18 @@ def show_company_comparison(ticker1: str | None = None, ticker2: str | None = No
                 except Exception as exc:
                     st.error(f"Could not retrieve company information: {exc}")
                     return
-            record_search(
+            history_id = record_search(
                 "comparison",
                 ticker1,
                 ticker2,
                 primary_name=(info1.get("shortName") or info1.get("longName") or ticker1),
                 secondary_name=(info2.get("shortName") or info2.get("longName") or ticker2),
             )
+            st.session_state["current_history_id"] = history_id
+            st.session_state["notes_history_editor_open"] = False
+            st.session_state["notes_pending_context"] = None
+            st.session_state["notes_active_id"] = None
+            st.session_state["notes_draft"] = False
             st.session_state["nimbus_comparison_results"] = (ticker1, info1, ticker2, info2)
             data = st.session_state["nimbus_comparison_results"]
 
