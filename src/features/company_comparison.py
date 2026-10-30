@@ -1,8 +1,10 @@
 """Nimbus two-company comparison page. Run through src/app.py or this file directly."""
+from concurrent.futures import ThreadPoolExecutor
 from datetime import datetime, timezone
 from pathlib import Path
 from html import escape
 import math
+from typing import Optional
 
 import pandas as pd
 import streamlit as st
@@ -98,6 +100,22 @@ def company_history(ticker, period):
     if not isinstance(result, pd.DataFrame) or any(c not in result.columns for c in needed):
         return pd.DataFrame(columns=needed)
     return result[needed].dropna(subset=["Close"])
+
+
+def _load_company_pair(ticker1, ticker2):
+    """Load the two Yahoo company profiles concurrently, preserving input order."""
+    with ThreadPoolExecutor(max_workers=2) as executor:
+        first = executor.submit(company_info, ticker1)
+        second = executor.submit(company_info, ticker2)
+        return first.result(), second.result()
+
+
+def _load_history_pair(ticker1, ticker2, period):
+    """Load price histories concurrently; the underlying functions are cached."""
+    with ThreadPoolExecutor(max_workers=2) as executor:
+        first = executor.submit(company_history, ticker1, period)
+        second = executor.submit(company_history, ticker2, period)
+        return {ticker1: first.result(), ticker2: second.result()}
 
 
 def _stock_chart(history, currency="USD"):
@@ -260,20 +278,29 @@ def _comparison(t1, i1, t2, i2):
         st.warning(f"Currencies differ ({c1} versus {c2}); values are not FX-converted.")
 
 
-def _render_comparison_dashboard(
-    t1,
-    i1,
-    t2,
-    i2,
-    period,
-    histories=None,
-    history_cache_only=False,
-):
-    histories = histories or {}
-    first, second = st.columns(2, gap="medium")
-    with first:
+def _render_comparison_dashboard(t1, i1, t2, i2, period, histories=None, history_cache_only=False):
+    histories = dict(histories or {})
+    if not history_cache_only:
+        history_cache = st.session_state.setdefault("nimbus_comparison_history_cache", {})
+        for ticker in (t1, t2):
+            if histories.get(ticker) is None:
+                previous = history_cache.get((ticker, period))
+                if previous is not None:
+                    histories[ticker] = previous
+        missing = [ticker for ticker in (t1, t2) if histories.get(ticker) is None]
+        if len(missing) == 2:
+            with st.spinner("Loading comparison price history..."):
+                histories.update(_load_history_pair(t1, t2, period))
+        elif len(missing) == 1:
+            with st.spinner("Loading price history..."):
+                histories[missing[0]] = company_history(missing[0], period)
+        history_cache = st.session_state.setdefault("nimbus_comparison_history_cache", {})
+        for ticker, history in histories.items():
+            history_cache[(ticker, period)] = history
+    c1, c2 = st.columns(2, gap="medium")
+    with c1:
         _profile(t1, i1, period, histories.get(t1), history_cache_only)
-    with second:
+    with c2:
         _profile(t2, i2, period, histories.get(t2), history_cache_only)
 
     st.markdown('<div class="nimbus-section">Key metrics comparison</div>', unsafe_allow_html=True)
@@ -281,19 +308,12 @@ def _render_comparison_dashboard(
 
 
 def get_cached_comparison(ticker1: str, ticker2: str):
-    """Return the active comparison and chart data only when tickers match."""
+    """Return the active comparison and chart data only when both tickers match."""
     data = st.session_state.get("nimbus_comparison_results")
-    if not data or data[0] != ticker1 or data[2] != ticker2:
+    if not data or data[0] != ticker1.strip().upper() or data[2] != ticker2.strip().upper():
         return None
 
-    period_labels = {
-        "1M": "1mo",
-        "3M": "3mo",
-        "6M": "6mo",
-        "1Y": "1y",
-        "5Y": "5y",
-        "ALL": "max",
-    }
+    period_labels = {"1M": "1mo", "3M": "3mo", "6M": "6mo", "1Y": "1y", "5Y": "5y", "ALL": "max"}
     label = st.session_state.get("nimbus_history_period", "1Y")
     period = period_labels.get(label, "1y")
     history_cache = st.session_state.get("nimbus_comparison_history_cache", {})
@@ -302,14 +322,14 @@ def get_cached_comparison(ticker1: str, ticker2: str):
         "period": period,
         "histories": {
             ticker: history_cache.get((ticker, period))
-            for ticker in (ticker1, ticker2)
+            for ticker in (ticker1.strip().upper(), ticker2.strip().upper())
         },
         "retrieved_at": st.session_state.get("nimbus_comparison_retrieved_at"),
     }
 
 
 def show_cached_comparison(cached_comparison) -> None:
-    """Render a saved comparison without fetching new data."""
+    """Render a cached comparison without fetching new company or price data."""
     if not cached_comparison:
         st.info("Cached comparison data is not available for this ticker pair in this session.")
         return
@@ -317,23 +337,32 @@ def show_cached_comparison(cached_comparison) -> None:
     st.markdown(CSS, unsafe_allow_html=True)
     t1, i1, t2, i2 = cached_comparison["data"]
     retrieved_at = cached_comparison.get("retrieved_at")
-    st.caption(
-        f"Cached data retrieved: {retrieved_at}"
-        if retrieved_at
-        else "Cached comparison data; retrieval time unavailable."
-    )
+    if retrieved_at:
+        st.caption(f"Cached data retrieved: {retrieved_at}")
+    else:
+        st.caption("Cached comparison data; retrieval time unavailable.")
+
     _render_comparison_dashboard(
         t1,
         i1,
         t2,
         i2,
         cached_comparison["period"],
-        histories=cached_comparison["histories"],
+        histories=cached_comparison.get("histories") or {},
         history_cache_only=True,
     )
 
 
-def show_company_comparison(ticker1: str | None = None, ticker2: str | None = None):
+def _remember_history_for_notes(history_id):
+    """Keep Recent History / Notes state compatible with current main."""
+    st.session_state["current_history_id"] = history_id
+    st.session_state["notes_history_editor_open"] = False
+    st.session_state["notes_pending_context"] = None
+    st.session_state["notes_active_id"] = None
+    st.session_state["notes_draft"] = False
+
+
+def show_company_comparison(ticker1: Optional[str] = None, ticker2: Optional[str] = None):
     """Render the complete Nimbus comparison interface."""
     st.markdown(CSS, unsafe_allow_html=True)
     st.markdown('<div class="nimbus-kicker">NIMBUS / FINANCIAL INTELLIGENCE</div>', unsafe_allow_html=True)
@@ -360,8 +389,7 @@ def show_company_comparison(ticker1: str | None = None, ticker2: str | None = No
             return
         with st.spinner("Fetching data from Yahoo Finance..."):
             try:
-                info1 = company_info(ticker1_value)
-                info2 = company_info(ticker2_value)
+                info1, info2 = _load_company_pair(ticker1_value, ticker2_value)
             except Exception as exc:
                 st.error(f"Could not retrieve company information: {exc}")
                 return
@@ -372,20 +400,21 @@ def show_company_comparison(ticker1: str | None = None, ticker2: str | None = No
             primary_name=(info1.get("shortName") or info1.get("longName") or ticker1_value),
             secondary_name=(info2.get("shortName") or info2.get("longName") or ticker2_value),
         )
-        st.session_state["current_history_id"] = history_id
-        st.session_state["notes_history_editor_open"] = False
-        st.session_state["notes_pending_context"] = None
-        st.session_state["notes_active_id"] = None
-        st.session_state["notes_draft"] = False
+        _remember_history_for_notes(history_id)
         st.session_state["nimbus_comparison_results"] = (ticker1_value, info1, ticker2_value, info2)
+        st.session_state["nimbus_comparison_retrieved_at"] = datetime.now(timezone.utc).strftime("%Y-%m-%d %H:%M UTC")
 
     data = st.session_state.get("nimbus_comparison_results")
     if data is None:
         if ticker1 and ticker2:
+            ticker1 = ticker1.strip().upper()
+            ticker2 = ticker2.strip().upper()
+            if ticker1 == ticker2:
+                st.warning("Choose two different tickers.")
+                return
             with st.spinner("Fetching data from Yahoo Finance..."):
                 try:
-                    info1 = company_info(ticker1)
-                    info2 = company_info(ticker2)
+                    info1, info2 = _load_company_pair(ticker1, ticker2)
                 except Exception as exc:
                     st.error(f"Could not retrieve company information: {exc}")
                     return
@@ -396,12 +425,9 @@ def show_company_comparison(ticker1: str | None = None, ticker2: str | None = No
                 primary_name=(info1.get("shortName") or info1.get("longName") or ticker1),
                 secondary_name=(info2.get("shortName") or info2.get("longName") or ticker2),
             )
-            st.session_state["current_history_id"] = history_id
-            st.session_state["notes_history_editor_open"] = False
-            st.session_state["notes_pending_context"] = None
-            st.session_state["notes_active_id"] = None
-            st.session_state["notes_draft"] = False
+            _remember_history_for_notes(history_id)
             st.session_state["nimbus_comparison_results"] = (ticker1, info1, ticker2, info2)
+            st.session_state["nimbus_comparison_retrieved_at"] = datetime.now(timezone.utc).strftime("%Y-%m-%d %H:%M UTC")
             data = st.session_state["nimbus_comparison_results"]
 
     if data is None:
@@ -413,14 +439,7 @@ def show_company_comparison(ticker1: str | None = None, ticker2: str | None = No
     chosen = st.radio("Price history", list(period_labels), index=3,
                       horizontal=True, key="nimbus_history_period")
     period = period_labels[chosen]
-    c1, c2 = st.columns(2, gap="medium")
-    with c1:
-        _profile(t1, i1, period or "1y")
-    with c2:
-        _profile(t2, i2, period or "1y")
-
-    st.markdown('<div class="nimbus-section">Key metrics comparison</div>', unsafe_allow_html=True)
-    _comparison(t1, i1, t2, i2)
+    _render_comparison_dashboard(t1, i1, t2, i2, period or "1y")
 
     st.caption(f"Source: Yahoo Finance (via yfinance). Viewed {datetime.now(timezone.utc):%Y-%m-%d %H:%M} UTC. Data may be delayed, incomplete, or cached for up to 15 minutes. Not investment advice.")
 
