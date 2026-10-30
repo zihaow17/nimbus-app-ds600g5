@@ -13,6 +13,7 @@ from io import StringIO
 import json
 from pathlib import Path
 from typing import Optional
+from uuid import NAMESPACE_URL, uuid4, uuid5
 
 import pandas as pd
 
@@ -21,6 +22,7 @@ HISTORY_DIR = PROJECT_ROOT / ".cache" / "nimbus"
 HISTORY_PATH = HISTORY_DIR / "search_history.csv"
 HISTORY_COLUMNS = [
     "user_id",
+    "history_id",
     "timestamp_utc",
     "search_type",
     "primary_ticker",
@@ -98,6 +100,11 @@ def _migrate_legacy_history_file() -> None:
         if len(row) < len(old_columns):
             row.extend([""] * (len(old_columns) - len(row)))
         old_record = dict(zip(old_columns, row))
+        if not old_record.get("history_id"):
+            old_record["history_id"] = str(uuid5(
+                NAMESPACE_URL,
+                "|".join(old_record.get(column, "") for column in old_columns),
+            ))
         migrated_rows.append([old_record.get(column, "") for column in HISTORY_COLUMNS])
 
     with HISTORY_PATH.open("w", newline="", encoding="utf-8") as csv_file:
@@ -119,6 +126,7 @@ def _ensure_history_file() -> Path:
 def _normalize_history_entry(row: dict[str, str]) -> Optional[dict[str, str]]:
     """Convert a stored CSV row into a display-ready search record."""
     user_id = (row.get("user_id") or "").strip()
+    history_id = (row.get("history_id") or "").strip()
     search_type = (row.get("search_type") or "").strip().lower()
     primary_ticker = (row.get("primary_ticker") or "").strip().upper()
     secondary_ticker = (row.get("secondary_ticker") or "").strip().upper()
@@ -129,12 +137,24 @@ def _normalize_history_entry(row: dict[str, str]) -> Optional[dict[str, str]]:
     if analysis_type not in {"all", "filings", "news", "stock price ratings"}:
         analysis_type = "stock price ratings"
     result = _deserialize_result((row.get("result_json") or "").strip())
+    if not history_id:
+        history_id = str(uuid5(
+            NAMESPACE_URL,
+            "|".join([
+                search_type,
+                timestamp,
+                primary_ticker,
+                secondary_ticker,
+                analysis_type,
+            ]),
+        ))
 
     if search_type == "single":
         if not primary_ticker:
             return None
         return {
             "user_id": user_id,
+            "history_id": history_id,
             "timestamp": timestamp,
             "search_type": "Company search",
             "company_name": primary_name or primary_ticker,
@@ -154,6 +174,7 @@ def _normalize_history_entry(row: dict[str, str]) -> Optional[dict[str, str]]:
         name_two = secondary_name or secondary_ticker or "Unknown company"
         return {
             "user_id": user_id,
+            "history_id": history_id,
             "timestamp": timestamp,
             "search_type": "Company comparison",
             "company_name": f"{name_one} vs {name_two}",
@@ -178,22 +199,24 @@ def record_search(
     user_id: Optional[str] = None,
     analysis_type: str = "",
     result=None,
-) -> Path:
-    """Append a single search to the local CSV history file."""
+) -> str:
+    """Append a single search to the local CSV history file and return its ID."""
     primary = (primary_ticker or "").strip().upper()
     secondary = (secondary_ticker or "").strip().upper()
 
     if not primary and not secondary:
-        return HISTORY_PATH
+        return ""
 
     normalized_type = "single" if search_type == "single" else "comparison"
     file_path = _ensure_history_file()
     timestamp = datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
+    history_id = str(uuid4())
 
     with file_path.open("a", newline="", encoding="utf-8") as csv_file:
         writer = csv.writer(csv_file)
         writer.writerow([
             (user_id or "").strip(),
+            history_id,
             timestamp,
             normalized_type,
             primary,
@@ -204,7 +227,7 @@ def record_search(
             _serialize_result(result),
         ])
 
-    return file_path
+    return history_id
 
 
 def load_history(user_id: Optional[str] = None) -> pd.DataFrame:
@@ -215,6 +238,7 @@ def load_history(user_id: Optional[str] = None) -> pd.DataFrame:
     if not file_path.exists():
         return pd.DataFrame(columns=[
             "user_id",
+            "history_id",
             "timestamp",
             "search_type",
             "company_name",
@@ -244,6 +268,7 @@ def load_history(user_id: Optional[str] = None) -> pd.DataFrame:
 
     frame = pd.DataFrame(rows, columns=[
         "user_id",
+        "history_id",
         "timestamp",
         "search_type",
         "company_name",

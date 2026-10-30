@@ -286,14 +286,18 @@ def _run_single_search(ticker):
 
     # Preserve the existing search history feature.
     try:
-        record_search(
+        history_id = record_search(
             "single",
             ticker,
             primary_name=company_name,
             analysis_type="all",
             result=result,
         )
-
+        st.session_state["current_history_id"] = history_id
+        st.session_state["notes_history_editor_open"] = False
+        st.session_state["notes_pending_context"] = None
+        st.session_state["notes_active_id"] = None
+        st.session_state["notes_draft"] = False
     except Exception as error:
         st.caption(
             f"Search history could not be saved: {error}"

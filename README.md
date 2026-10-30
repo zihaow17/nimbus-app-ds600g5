@@ -13,9 +13,11 @@ The top navigation contains three pages:
 
 - **Company Search**: Search a ticker to fetch financial statements, recent news, stock price, and analyst ratings together. Use the result selector to navigate among the three views; stock price and analyst ratings is shown first by default, followed by financial statements and recent news. Successful results remain available when switching app pages during the session. A compact favourites row below the search bar shows AAPL, NVDA, and MU with prices cached for five minutes; clicking one fetches all three result views.
 - **Company Comparison**: Compare two companies' prices and financial metrics.
-- **Recently Viewed**: Review saved search records, shown five at a time with a Show more control. Select View to open a read-only result dialog. New single-company records retain all three fetched datasets; older records fetch stock price and analyst ratings when opened. Comparison records show matching data cached in the current app session, when available.
+- **Recently Viewed**: Review saved search records, shown five at a time with a Show more control. Select View to open a read-only result dialog. New single-company records retain all three fetched datasets; older records fetch stock price and analyst ratings when opened. Comparison records show matching data cached in the current app session, when available. Each row also shows its associated note count and provides a Notes action when notes are available.
 
 Search history is temporarily stored in `.cache/nimbus/search_history.csv`. It includes search metadata and, for new single-company searches, all three serialized result datasets. Older records retain their originally saved result. The cache is local to the machine and is excluded from Git.
+
+The floating Notes button is available while viewing an active company search or comparison. Notes are stored locally in `.cache/nimbus/notes.db`, can be reviewed globally, and are associated with the specific search record when possible. New notes remain drafts until the user submits **Save (Ctrl+Enter)**; blank drafts are not persisted. Because the demo has no authentication, local history and notes are shared by users of the same app instance.
 
 ## Project Structure
 
@@ -25,7 +27,8 @@ Search history is temporarily stored in `.cache/nimbus/search_history.csv`. It i
 - `src/features/favourites.py`: Fixed favourite-company cards and cached price lookup.
 - `src/features/company_comparison.py`: Company Comparison page, metrics, and Plotly chart.
 - `src/features/history.py`: Local CSV search-history persistence and normalization.
-- `src/features/recent_history.py`: Recently Viewed page and five-row expansion.
+- `src/features/recent_history.py`: Recently Viewed page, five-row expansion, result dialogs, and per-search note actions.
+- `src/features/notes.py`: Fixed floating Notes control, note editor, global past-notes list, and local SQLite persistence.
 - `assets/`: Nimbus logos and optional company logos.
 - `scripts/nimbus-aws.yaml`: AWS CloudFormation deployment template.
 - `filings.ipynb`, `news.ipynb`, `stock_price_ratings.ipynb`: Exploratory notebooks.
