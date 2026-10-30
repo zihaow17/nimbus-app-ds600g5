@@ -1,5 +1,5 @@
 
-"""Company search page and result rendering for Nimbus."""
+"""Nimbus Company Search with lazy loading and caching."""
 
 from html import escape
 from pathlib import Path
@@ -9,21 +9,34 @@ import yfinance as yf
 
 from analysis import (
     get_analyst_ratings,
-    get_financials,
     get_news,
-    get_price,
-    format_financial_statement,
     get_financial_currency,
 )
-from features.company_comparison import _company_logo, company_info
+
+from features.company_comparison import (
+    _company_logo,
+    company_info,
+)
+from features.company_overview import show_company_overview
 from features.favourites import show_favourite_companies
 from features.history import record_search
-from features.company_overview import show_company_overview
-from features.single_stock_dashboard import show_single_stock_dashboard
+from features.single_stock_dashboard import (
+    show_single_stock_dashboard,
+)
+from features.financial_statements import (
+    show_financial_statements,
+)
 
+
+# ============================================================
+# SETTINGS
+# ============================================================
 
 PROJECT_ROOT = Path(__file__).resolve().parents[2]
-WIDE_LOGO_PATH = PROJECT_ROOT / "assets" / "nimbus-logo-wide.png"
+
+WIDE_LOGO_PATH = (
+    PROJECT_ROOT / "assets" / "nimbus-logo-wide.png"
+)
 
 RESULTS_KEY = "company_search_results"
 RESULT_VIEW_KEY = "company_search_result_view"
@@ -42,6 +55,63 @@ RESULT_VIEW_LABELS = {
 
 
 # ============================================================
+# CACHE YAHOO FINANCE REQUESTS
+# ============================================================
+
+@st.cache_data(ttl=1800, show_spinner=False)
+def cached_company_name(ticker):
+    """Cache company names for 30 minutes."""
+
+    try:
+        info = yf.Ticker(ticker).info or {}
+
+        return (
+            info.get("shortName")
+            or info.get("longName")
+            or ticker
+        )
+
+    except Exception:
+        return ticker
+
+
+@st.cache_data(ttl=1800, show_spinner=False)
+def cached_company_info(ticker):
+    """Cache company information for 30 minutes."""
+
+    try:
+        return company_info(ticker) or {}
+
+    except Exception:
+        return {}
+
+
+@st.cache_data(ttl=1800, show_spinner=False)
+def cached_analyst_ratings(ticker):
+    """Only retrieve analyst ratings when the stock page loads."""
+
+    return get_analyst_ratings(ticker)
+
+
+@st.cache_data(ttl=900, show_spinner=False)
+def cached_news(ticker):
+    """Only retrieve news when the News page loads."""
+
+    return get_news(ticker)
+
+
+@st.cache_data(ttl=3600, show_spinner=False)
+def cached_financial_currency(ticker):
+    """Cache the financial reporting currency."""
+
+    try:
+        return get_financial_currency(ticker)
+
+    except Exception:
+        return None
+
+
+# ============================================================
 # STYLING
 # ============================================================
 
@@ -57,7 +127,6 @@ COMPANY_IDENTITY_CSS = """
 .nimbus-company-name {
     font-size: 1.12rem;
     font-weight: 740;
-    line-height: 1.35;
 }
 
 .nimbus-company-symbol {
@@ -109,11 +178,13 @@ COMPANY_IDENTITY_CSS = """
 """
 
 
-# ============================================================
-# COMPANY IDENTITY
-# ============================================================
+def _company_identity_html(
+    ticker,
+    info,
+    company_name,
+):
+    """Render company logo and identity."""
 
-def _company_identity_html(ticker, info, company_name):
     name = escape(
         str(
             company_name
@@ -124,10 +195,11 @@ def _company_identity_html(ticker, info, company_name):
     )
 
     exchange = escape(
-        str(info.get("exchange") or "Listed company")
+        str(
+            info.get("exchange")
+            or "Listed company"
+        )
     )
-
-    safe_ticker = escape(str(ticker))
 
     return (
         '<div class="nimbus-company">'
@@ -135,76 +207,84 @@ def _company_identity_html(ticker, info, company_name):
         '<div>'
         f'<div class="nimbus-company-name">{name}</div>'
         '<div class="nimbus-company-symbol">'
-        f'{safe_ticker} · {exchange}'
+        f'{escape(str(ticker))} · {exchange}'
         '</div>'
         '</div>'
         '</div>'
     )
 
 
+# ============================================================
+# SEARCH INPUT
+# ============================================================
+
 def _uppercase_search_ticker():
-    ticker = st.session_state.get(
+    """Convert ticker symbols to uppercase."""
+
+    value = st.session_state.get(
         "company_search_ticker",
         "",
     )
-    st.session_state["company_search_ticker"] = ticker.upper()
+
+    st.session_state["company_search_ticker"] = (
+        value.upper()
+    )
 
 
 def _company_name_for_ticker(ticker):
+    """Preserve the existing helper interface."""
+
     ticker = (ticker or "").strip().upper()
 
     if not ticker:
         return "Unknown company"
 
-    try:
-        info = yf.Ticker(ticker).info or {}
-        return (
-            info.get("shortName")
-            or info.get("longName")
-            or ticker
-        )
-    except Exception:
-        return ticker
+    return cached_company_name(ticker)
 
 
 # ============================================================
-# FETCH SEARCH DATA
+# RUN COMPANY SEARCH
 # ============================================================
 
 def _run_single_search(ticker):
+    """
+    Search for a company without fetching every dataset.
+
+    Financial statements, news, and detailed stock data
+    are loaded only when the user opens their result page.
+    """
+
     ticker = (ticker or "").strip().upper()
 
     if not ticker:
         st.error("Please enter a ticker symbol.")
         return
 
-    company_name = _company_name_for_ticker(ticker)
+    with st.spinner(f"Searching {ticker}..."):
+        company_name = _company_name_for_ticker(ticker)
 
-    with st.spinner(f"Loading data for {ticker}..."):
-        result = {
-            "ticker": ticker,
-            "company_name": company_name,
-            "analysis_type": "all",
-            "errors": {},
-        }
-
-        functions = [
-            ("financials", get_financials),
-            ("news", get_news),
-            ("price", get_price),
-            ("ratings", get_analyst_ratings),
-        ]
-
-        for key, fetch_function in functions:
-            try:
-                result[key] = fetch_function(ticker)
-            except Exception as error:
-                result[key] = None
-                result["errors"][key] = str(error)
+    # Save only small metadata.
+    # The expensive financial datasets are fetched later.
+    result = {
+        "ticker": ticker,
+        "company_name": company_name,
+        "analysis_type": "all",
+        "lazy_loading": True,
+        "errors": {},
+        "financials": None,
+        "news": None,
+        "price": None,
+        "ratings": None,
+    }
 
     st.session_state[RESULTS_KEY] = result
-    st.session_state[RESULT_VIEW_KEY] = RESULT_VIEW_OPTIONS[0]
 
+    # Start on the stock price page.
+    st.session_state[RESULT_VIEW_KEY] = (
+        RESULT_VIEW_OPTIONS[0]
+    )
+
+    # Preserve the existing search history feature.
     try:
         record_search(
             "single",
@@ -213,87 +293,100 @@ def _run_single_search(ticker):
             analysis_type="all",
             result=result,
         )
+
     except Exception as error:
-        st.caption(f"Search history could not be saved: {error}")
+        st.caption(
+            f"Search history could not be saved: {error}"
+        )
 
 
 # ============================================================
-# FINANCIAL STATEMENTS
+# LAZY-LOADED FINANCIAL STATEMENTS
 # ============================================================
 
 def _render_financial_statements(
     ticker,
-    financials,
+    financials=None,
     error_message=None,
 ):
-    if financials is None:
-        st.error("Financial statements are unavailable.")
-        if error_message:
-            st.caption(str(error_message))
-        return
+    """
+    Retrieve financial statements only when selected.
 
-    try:
-        currency = get_financial_currency(ticker)
-    except Exception:
-        currency = None
+    financial_statements.py already caches full statements.
+    """
 
-    st.caption(
-        f"Reporting currency: {currency or 'Unavailable'} | "
-        "B = billions, M = millions, K = thousands. "
-        "Values are rounded for display."
+    if financials is None and error_message:
+        st.warning(
+            "Previously saved financial data is unavailable. "
+            "Nimbus will try to retrieve the latest statements."
+        )
+
+    currency = cached_financial_currency(ticker)
+
+    show_financial_statements(
+        ticker=ticker,
+        financials=financials,
+        currency=currency,
     )
 
-    for section, data in financials.items():
-        with st.container(border=True):
-            st.subheader(section)
-
-            if data is None or data.empty:
-                st.info(f"No {section.lower()} data available.")
-            else:
-                formatted_data = format_financial_statement(
-                    data,
-                    currency=currency,
-                )
-
-                st.dataframe(
-                    formatted_data,
-                    width="stretch",
-                )
-
 
 # ============================================================
-# RECENT NEWS
+# LAZY-LOADED NEWS
 # ============================================================
 
-def render_news(ticker, articles, error=None):
+def render_news(ticker, articles=None, error=None):
+    """Display company news."""
+
     with st.container(border=True):
-        st.subheader(f"Recent news for {ticker}")
+        st.subheader(f"Recent News for {ticker}")
 
         if articles is None:
-            st.info("Recent news is unavailable.")
+            with st.spinner("Loading recent news..."):
+                try:
+                    articles = cached_news(ticker)
+
+                except Exception as fetch_error:
+                    st.error(
+                        "Could not load news from Yahoo Finance."
+                    )
+                    st.caption(str(fetch_error))
+                    return
+
+        if articles is None or articles.empty:
+            st.info(
+                "No recent news is currently available."
+            )
+
             if error:
                 st.caption(str(error))
 
-        elif articles.empty:
-            st.info("No recent news was found.")
+            return
 
-        else:
-            st.dataframe(
-                articles,
-                width="stretch",
-                hide_index=True,
-            )
+        st.dataframe(
+            articles,
+            width="stretch",
+            hide_index=True,
+        )
 
 
 # ============================================================
-# STOCK DASHBOARD
+# LAZY-LOADED STOCK DASHBOARD
 # ============================================================
 
-def render_stock_dashboard(ticker, company_name, ratings):
-    try:
-        info = company_info(ticker) or {}
-    except Exception:
-        info = {}
+def render_stock_dashboard(
+    ticker,
+    company_name,
+    ratings=None,
+):
+    """
+    Render the existing stock dashboard.
+
+    Company Overview remains after the stock chart
+    and key statistics, as previously requested.
+    """
+
+    with st.spinner("Loading company information..."):
+        info = cached_company_info(ticker)
 
     st.markdown(
         COMPANY_IDENTITY_CSS,
@@ -301,12 +394,22 @@ def render_stock_dashboard(ticker, company_name, ratings):
     )
 
     st.markdown(
-        _company_identity_html(ticker, info, company_name),
+        _company_identity_html(
+            ticker,
+            info,
+            company_name,
+        ),
         unsafe_allow_html=True,
     )
 
-    # Company Overview appears below the current price,
-    # before the historical stock chart.
+    if ratings is None:
+        with st.spinner("Loading analyst ratings..."):
+            try:
+                ratings = cached_analyst_ratings(ticker)
+
+            except Exception:
+                ratings = None
+
     show_single_stock_dashboard(
         ticker,
         ratings=ratings,
@@ -315,21 +418,43 @@ def render_stock_dashboard(ticker, company_name, ratings):
 
 
 # ============================================================
-# DISPLAY SEARCH RESULTS
+# RENDER SEARCH RESULTS
 # ============================================================
 
-def render_search_result(result, selector_key=RESULT_VIEW_KEY):
+def render_search_result(
+    result,
+    selector_key=RESULT_VIEW_KEY,
+):
     if not result:
         return
 
-    ticker = result.get("ticker", "")
+    ticker = str(
+        result.get("ticker", "")
+    ).strip().upper()
 
     if not ticker:
-        st.warning("The saved search has no ticker.")
+        st.warning(
+            "The saved search does not contain a ticker."
+        )
         return
 
-    company_name = result.get("company_name", ticker)
-    analysis_type = result.get("analysis_type", "all")
+    company_name = result.get(
+        "company_name",
+        ticker,
+    )
+
+    analysis_type = result.get(
+        "analysis_type",
+        "all",
+    )
+
+    lazy = bool(
+        result.get("lazy_loading", False)
+    )
+
+    # --------------------------------------------------------
+    # SUPPORT BOTH NEW AND OLD SAVED SEARCHES
+    # --------------------------------------------------------
 
     if "financials" in result:
         datasets = {
@@ -368,28 +493,51 @@ def render_search_result(result, selector_key=RESULT_VIEW_KEY):
 
     errors = result.get("errors") or {}
 
-    if selected_view not in datasets:
-        st.info(
-            "This saved search does not contain that result page. "
-            "Please run a new search."
-        )
+    # --------------------------------------------------------
+    # HANDLE OLDER SAVED RESULTS
+    # --------------------------------------------------------
 
-    elif selected_view == "filings":
+    if (
+        not lazy
+        and selected_view not in datasets
+    ):
+        st.info(
+            "This saved search does not contain "
+            "that result page. Run a new search "
+            "to access all sections."
+        )
+        return
+
+    # --------------------------------------------------------
+    # FINANCIAL STATEMENTS
+    # --------------------------------------------------------
+
+    if selected_view == "filings":
         _render_financial_statements(
             ticker,
-            datasets["filings"],
+            datasets.get("filings"),
             errors.get("financials"),
         )
+
+    # --------------------------------------------------------
+    # NEWS
+    # --------------------------------------------------------
 
     elif selected_view == "news":
         render_news(
             ticker,
-            datasets["news"],
+            datasets.get("news"),
             errors.get("news"),
         )
 
+    # --------------------------------------------------------
+    # STOCK PRICE AND ANALYST INSIGHTS
+    # --------------------------------------------------------
+
     else:
-        stock_data = datasets["stock price ratings"]
+        stock_data = datasets.get(
+            "stock price ratings"
+        ) or {}
 
         render_stock_dashboard(
             ticker=ticker,
@@ -397,27 +545,33 @@ def render_search_result(result, selector_key=RESULT_VIEW_KEY):
             ratings=stock_data.get("ratings"),
         )
 
-    # Avoid showing the overview twice on the stock page.
-    if (
-        selected_view != "stock price ratings"
-        and selected_view in datasets
-    ):
+    # --------------------------------------------------------
+    # COMPANY OVERVIEW
+    # --------------------------------------------------------
+
+    # The stock dashboard already contains Company Overview.
+    # Keep it at the bottom for News and Financial Statements.
+    if selected_view != "stock price ratings":
         st.divider()
         show_company_overview(ticker)
 
 
 def _render_search_results():
-    result = st.session_state.get(RESULTS_KEY)
+    result = st.session_state.get(
+        RESULTS_KEY
+    )
 
     if result:
         render_search_result(result)
 
 
 # ============================================================
-# NIMBUS HOMEPAGE
+# NIMBUS SEARCH HOMEPAGE
 # ============================================================
 
 def show_company_search_page():
+    """Render the existing Nimbus homepage."""
+
     st.markdown(
         """
         <style>
@@ -446,10 +600,9 @@ def show_company_search_page():
         unsafe_allow_html=True,
     )
 
-    # IMPORTANT:
-    # Use st.image for the logo and unindented HTML for
-    # the title/description. This prevents HTML tags
-    # from showing up as a Markdown code block.
+    # --------------------------------------------------------
+    # LOGO AND HOMEPAGE TITLE
+    # --------------------------------------------------------
 
     if WIDE_LOGO_PATH.exists():
         left, middle, right = st.columns([1, 4, 1])
@@ -480,12 +633,19 @@ def show_company_search_page():
         unsafe_allow_html=True,
     )
 
+    # --------------------------------------------------------
+    # COMPANY SEARCH INPUT
+    # --------------------------------------------------------
+
     with st.container(key="company-search-bar"):
         ticker = st.text_input(
             "Company or ticker",
             placeholder="Search company or ticker",
             label_visibility="collapsed",
-            help="Enter a ticker symbol such as AAPL or NVDA.",
+            help=(
+                "Enter a ticker symbol such as "
+                "AAPL, MSFT, or NVDA."
+            ),
             key="company_search_ticker",
             on_change=_uppercase_search_ticker,
         )
@@ -494,18 +654,34 @@ def show_company_search_page():
             "e.g. Apple, AAPL, Microsoft, MSFT"
         )
 
+    # --------------------------------------------------------
+    # FAVOURITES
+    # --------------------------------------------------------
+
     selected_favourite = show_favourite_companies()
+
+    # --------------------------------------------------------
+    # SEARCH BUTTON
+    # --------------------------------------------------------
 
     with st.form("analysis_form"):
         left, center, right = st.columns([1, 1, 1])
 
         with center:
-            run_analysis = st.form_submit_button("Search")
+            run_analysis = st.form_submit_button(
+                "Search"
+            )
 
-    if selected_favourite:
-        _run_single_search(selected_favourite)
+    # Avoid fetching data twice if both actions occur.
+    selected_ticker = None
 
     if run_analysis:
-        _run_single_search(ticker)
+        selected_ticker = ticker
+
+    elif selected_favourite:
+        selected_ticker = selected_favourite
+
+    if selected_ticker:
+        _run_single_search(selected_ticker)
 
     _render_search_results()
