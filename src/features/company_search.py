@@ -1,5 +1,5 @@
 
-"""Nimbus Company Search with lazy loading and caching."""
+"""Company Search UI, Yahoo Finance orchestration, and rendering of stored results."""
 
 from html import escape
 from pathlib import Path
@@ -53,68 +53,7 @@ RESULT_VIEW_LABELS = {
     "news": "Recent news",
 }
 
-
-# ============================================================
-# CACHE YAHOO FINANCE REQUESTS
-# ============================================================
-
-@st.cache_data(ttl=1800, show_spinner=False)
-def cached_company_name(ticker):
-    """Cache company names for 30 minutes."""
-
-    try:
-        info = yf.Ticker(ticker).info or {}
-
-        return (
-            info.get("shortName")
-            or info.get("longName")
-            or ticker
-        )
-
-    except Exception:
-        return ticker
-
-
-@st.cache_data(ttl=1800, show_spinner=False)
-def cached_company_info(ticker):
-    """Cache company information for 30 minutes."""
-
-    try:
-        return company_info(ticker) or {}
-
-    except Exception:
-        return {}
-
-
-@st.cache_data(ttl=1800, show_spinner=False)
-def cached_analyst_ratings(ticker):
-    """Only retrieve analyst ratings when the stock page loads."""
-
-    return get_analyst_ratings(ticker)
-
-
-@st.cache_data(ttl=900, show_spinner=False)
-def cached_news(ticker):
-    """Only retrieve news when the News page loads."""
-
-    return get_news(ticker)
-
-
-@st.cache_data(ttl=3600, show_spinner=False)
-def cached_financial_currency(ticker):
-    """Cache the financial reporting currency."""
-
-    try:
-        return get_financial_currency(ticker)
-
-    except Exception:
-        return None
-
-
-# ============================================================
-# STYLING
-# ============================================================
-
+# Keep the company identity card visually consistent with the comparison page.
 COMPANY_IDENTITY_CSS = """
 <style>
 .nimbus-company {
@@ -230,6 +169,10 @@ def _uppercase_search_ticker():
         value.upper()
     )
 
+def _uppercase_search_ticker() -> None:
+    """Normalize the ticker field as the user types."""
+    ticker = st.session_state.get("company_search_ticker", "")
+    st.session_state["company_search_ticker"] = ticker.upper()
 
 def _company_name_for_ticker(ticker):
     """Preserve the existing helper interface."""
@@ -260,36 +203,41 @@ def _run_single_search(ticker):
         st.error("Please enter a ticker symbol.")
         return
 
-    with st.spinner(f"Searching {ticker}..."):
-        company_name = _company_name_for_ticker(ticker)
+    st.session_state.pop("company_search_history_id", None)
+    st.session_state.pop("company_search_user_id", None)
+    company_name = _company_name_for_ticker(ticker)
+    try:
+        with st.spinner(f"Loading financial statements, recent news, and stock data for {ticker}..."):
+            result = {"analysis_type": "all", "errors": {}}
+            for key, fetch in (
+                ("financials", get_financials),
+                ("news", get_news),
+                ("price", get_price),
+                ("ratings", get_analyst_ratings),
+            ):
+                try:
+                    result[key] = fetch(ticker)
+                except Exception as error:
+                    result[key] = None
+                    result["errors"][key] = str(error)
+    except Exception as error:
+        st.error(f"Could not load data for {ticker}. Check the symbol and try again.")
+        st.caption(f"Details: {error}")
+        return
 
-    # Save only small metadata.
-    # The expensive financial datasets are fetched later.
-    result = {
+    st.session_state[RESULTS_KEY] = {
         "ticker": ticker,
         "company_name": company_name,
-        "analysis_type": "all",
-        "lazy_loading": True,
-        "errors": {},
-        "financials": None,
-        "news": None,
-        "price": None,
-        "ratings": None,
+        **result,
     }
-
-    st.session_state[RESULTS_KEY] = result
-
-    # Start on the stock price page.
-    st.session_state[RESULT_VIEW_KEY] = (
-        RESULT_VIEW_OPTIONS[0]
-    )
-
-    # Preserve the existing search history feature.
+    st.session_state[RESULT_VIEW_KEY] = RESULT_VIEW_OPTIONS[0]
+    user_id = st.session_state["current_user_id"]
     try:
-        history_id = record_search(
+        search_id = record_search(
             "single",
             ticker,
             primary_name=company_name,
+            user_id=user_id,
             analysis_type="all",
             result=result,
         )
@@ -299,10 +247,11 @@ def _run_single_search(ticker):
         st.session_state["notes_active_id"] = None
         st.session_state["notes_draft"] = False
     except Exception as error:
-        st.caption(
-            f"Search history could not be saved: {error}"
-        )
-
+        st.error(f"Search results loaded, but history could not be saved for {ticker}.")
+        st.caption(f"Details: {error}")
+    else:
+        st.session_state["company_search_history_id"] = search_id
+        st.session_state["company_search_user_id"] = user_id
 
 # ============================================================
 # LAZY-LOADED FINANCIAL STATEMENTS

@@ -10,6 +10,7 @@ import yfinance as yf
 
 @st.cache_data(ttl=3600, show_spinner=False)
 def get_company_info(ticker: str) -> dict:
+    """Fetch company profile fields and cache them for one hour."""
     return yf.Ticker(ticker).info or {}
 
 
@@ -47,7 +48,7 @@ def show_company_overview(ticker: str) -> None:
         left, right = st.columns([2, 1.1], gap="large")
 
         with left:
-            # Limit the description length, like the reference image.
+            # Keep long company descriptions compact while preserving whole words.
             short_description = (
                 description[:450].rsplit(" ", 1)[0] + "..."
                 if len(description) > 450

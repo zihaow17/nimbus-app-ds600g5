@@ -1,5 +1,4 @@
-"""Nimbus two-company comparison page. Run through src/app.py or this file directly."""
-from concurrent.futures import ThreadPoolExecutor
+"""Company-comparison UI, cached Yahoo Finance lookups, and chart/metric rendering."""
 from datetime import datetime, timezone
 from pathlib import Path
 from html import escape
@@ -31,6 +30,7 @@ LOGO_URLS = {
     "META": "https://cdn.simpleicons.org/meta/0866FF",
 }
 
+# Style the custom dashboard cards while keeping charts, tables, and controls native.
 CSS = """
 <style>
 .nimbus-logo-wrap {display:inline-flex;width:48px;height:48px;align-items:center;justify-content:center;flex-shrink:0;}
@@ -119,7 +119,7 @@ def _load_history_pair(ticker1, ticker2, period):
 
 
 def _stock_chart(history, currency="USD"):
-    """Dark interactive area chart with volume and an OHLCV hover tooltip."""
+    """Render a price-and-volume chart with OHLCV hover details."""
     dates = history.index
     close = history["Close"]
     # Each company uses one consistent price-series color.
@@ -162,7 +162,7 @@ def _stock_chart(history, currency="USD"):
         hovermode="x", hoverlabel=dict(bgcolor="#17232e", font_color="#f0f4f8"),
         bargap=.18, dragmode="pan",
     )
-    st.plotly_chart(fig, use_container_width=True, config={"displaylogo": False, "scrollZoom": False})
+    st.plotly_chart(fig, width="stretch", config={"displaylogo": False, "scrollZoom": False})
 
 
 def _company_logo(ticker, info=None):
@@ -266,7 +266,7 @@ def _comparison(t1, i1, t2, i2):
     st.dataframe(
         pd.DataFrame(result),
         hide_index=True,
-        use_container_width=True,
+        width="stretch",
         height=460,
         column_config={
             "Metric": st.column_config.TextColumn("Metric", width="medium"),
@@ -279,24 +279,8 @@ def _comparison(t1, i1, t2, i2):
 
 
 def _render_comparison_dashboard(t1, i1, t2, i2, period, histories=None, history_cache_only=False):
-    histories = dict(histories or {})
-    if not history_cache_only:
-        history_cache = st.session_state.setdefault("nimbus_comparison_history_cache", {})
-        for ticker in (t1, t2):
-            if histories.get(ticker) is None:
-                previous = history_cache.get((ticker, period))
-                if previous is not None:
-                    histories[ticker] = previous
-        missing = [ticker for ticker in (t1, t2) if histories.get(ticker) is None]
-        if len(missing) == 2:
-            with st.spinner("Loading comparison price history..."):
-                histories.update(_load_history_pair(t1, t2, period))
-        elif len(missing) == 1:
-            with st.spinner("Loading price history..."):
-                histories[missing[0]] = company_history(missing[0], period)
-        history_cache = st.session_state.setdefault("nimbus_comparison_history_cache", {})
-        for ticker, history in histories.items():
-            history_cache[(ticker, period)] = history
+    """Lay out both company profiles and the shared metrics table."""
+    histories = histories or {}
     c1, c2 = st.columns(2, gap="medium")
     with c1:
         _profile(t1, i1, period, histories.get(t1), history_cache_only)
@@ -363,7 +347,7 @@ def _remember_history_for_notes(history_id):
 
 
 def show_company_comparison(ticker1: Optional[str] = None, ticker2: Optional[str] = None):
-    """Render the complete Nimbus comparison interface."""
+    """Validate comparison inputs, fetch company data, persist history, and render results."""
     st.markdown(CSS, unsafe_allow_html=True)
     st.markdown('<div class="nimbus-kicker">NIMBUS / FINANCIAL INTELLIGENCE</div>', unsafe_allow_html=True)
     st.markdown('<div class="nimbus-title">Company <span>Comparison</span></div>', unsafe_allow_html=True)
@@ -376,7 +360,7 @@ def show_company_comparison(ticker1: Optional[str] = None, ticker2: Optional[str
         with right:
             ticker2_value = st.text_input("Second company ticker", value=(ticker2 or "MSFT").upper(), key="nimbus_ticker2").strip().upper()
         with action:
-            submitted = st.form_submit_button("Compare →", type="primary", use_container_width=True)
+            submitted = st.form_submit_button("Compare →", type="primary", width="stretch")
 
     if submitted:
         ticker1_value = ticker1_value.strip().upper()
@@ -393,16 +377,27 @@ def show_company_comparison(ticker1: Optional[str] = None, ticker2: Optional[str
             except Exception as exc:
                 st.error(f"Could not retrieve company information: {exc}")
                 return
-        history_id = record_search(
-            "comparison",
-            ticker1_value,
-            ticker2_value,
-            primary_name=(info1.get("shortName") or info1.get("longName") or ticker1_value),
-            secondary_name=(info2.get("shortName") or info2.get("longName") or ticker2_value),
-        )
-        _remember_history_for_notes(history_id)
+        st.session_state.pop("nimbus_comparison_history_id", None)
+        st.session_state.pop("nimbus_comparison_user_id", None)
         st.session_state["nimbus_comparison_results"] = (ticker1_value, info1, ticker2_value, info2)
         st.session_state["nimbus_comparison_retrieved_at"] = datetime.now(timezone.utc).strftime("%Y-%m-%d %H:%M UTC")
+        user_id = st.session_state["current_user_id"]
+        try:
+            search_id = record_search(
+                "comparison",
+                ticker1_value,
+                ticker2_value,
+                primary_name=(info1.get("shortName") or info1.get("longName") or ticker1_value),
+                secondary_name=(info2.get("shortName") or info2.get("longName") or ticker2_value),
+                user_id=user_id,
+                analysis_type="comparison",
+            )
+        except Exception as error:
+            st.error("Comparison loaded, but search history could not be saved.")
+            st.caption(f"Details: {error}")
+        else:
+            st.session_state["nimbus_comparison_history_id"] = search_id
+            st.session_state["nimbus_comparison_user_id"] = user_id
 
     data = st.session_state.get("nimbus_comparison_results")
     if data is None:
@@ -418,17 +413,28 @@ def show_company_comparison(ticker1: Optional[str] = None, ticker2: Optional[str
                 except Exception as exc:
                     st.error(f"Could not retrieve company information: {exc}")
                     return
-            history_id = record_search(
-                "comparison",
-                ticker1,
-                ticker2,
-                primary_name=(info1.get("shortName") or info1.get("longName") or ticker1),
-                secondary_name=(info2.get("shortName") or info2.get("longName") or ticker2),
-            )
-            _remember_history_for_notes(history_id)
+            st.session_state.pop("nimbus_comparison_history_id", None)
+            st.session_state.pop("nimbus_comparison_user_id", None)
             st.session_state["nimbus_comparison_results"] = (ticker1, info1, ticker2, info2)
             st.session_state["nimbus_comparison_retrieved_at"] = datetime.now(timezone.utc).strftime("%Y-%m-%d %H:%M UTC")
             data = st.session_state["nimbus_comparison_results"]
+            user_id = st.session_state["current_user_id"]
+            try:
+                search_id = record_search(
+                    "comparison",
+                    ticker1,
+                    ticker2,
+                    primary_name=(info1.get("shortName") or info1.get("longName") or ticker1),
+                    secondary_name=(info2.get("shortName") or info2.get("longName") or ticker2),
+                    user_id=user_id,
+                    analysis_type="comparison",
+                )
+            except Exception as error:
+                st.error("Comparison loaded, but search history could not be saved.")
+                st.caption(f"Details: {error}")
+            else:
+                st.session_state["nimbus_comparison_history_id"] = search_id
+                st.session_state["nimbus_comparison_user_id"] = user_id
 
     if data is None:
         st.info("Enter two tickers and select Compare to load the dashboard.")

@@ -1,6 +1,4 @@
-"""Reusable financial-data functions for Nimbus."""
-
-from numbers import Number
+"""Yahoo Finance data-access functions shared by search and comparison features."""
 
 import pandas as pd
 import yfinance as yf

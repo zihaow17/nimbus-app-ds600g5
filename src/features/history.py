@@ -1,40 +1,21 @@
-"""Simple local search-history persistence for the Streamlit app.
-
-This is intentionally limited to local, temporary storage during development. The
-project is expected to move to AWS-backed storage later, but this keeps the
-current app behavior unchanged while allowing recent searches to be saved locally.
-"""
+"""PostgreSQL persistence for company-search and comparison history."""
 
 from __future__ import annotations
 
-import csv
 from datetime import datetime, timezone
-from io import StringIO
 import json
-from pathlib import Path
+from io import StringIO
 from typing import Optional
-from uuid import NAMESPACE_URL, uuid4, uuid5
+from uuid import uuid4
 
 import pandas as pd
+from psycopg.types.json import Jsonb
 
-PROJECT_ROOT = Path(__file__).resolve().parents[2]
-HISTORY_DIR = PROJECT_ROOT / ".cache" / "nimbus"
-HISTORY_PATH = HISTORY_DIR / "search_history.csv"
-HISTORY_COLUMNS = [
-    "user_id",
-    "history_id",
-    "timestamp_utc",
-    "search_type",
-    "primary_ticker",
-    "secondary_ticker",
-    "primary_name",
-    "secondary_name",
-    "analysis_type",
-    "result_json",
-]
+from database import DEMO_USERS, connect, ensure_schema
 
 
 def _encode_result_value(value):
+    """Represent DataFrames as JSON-safe markers before storing results in JSONB."""
     if isinstance(value, pd.DataFrame):
         return {"__dataframe__": value.to_json(orient="split", date_format="iso")}
     if isinstance(value, dict):
@@ -45,6 +26,7 @@ def _encode_result_value(value):
 
 
 def _decode_result_value(value):
+    """Restore marked DataFrame payloads when saved search results are loaded."""
     if isinstance(value, dict) and set(value) == {"__dataframe__"}:
         return pd.read_json(StringIO(value["__dataframe__"]), orient="split")
     if isinstance(value, dict):
@@ -54,140 +36,50 @@ def _decode_result_value(value):
     return value
 
 
-def _serialize_result(result) -> str:
-    return json.dumps(_encode_result_value(result), separators=(",", ":")) if result is not None else ""
-
-
-def _deserialize_result(result_json: str):
-    if not result_json:
-        return None
-    return _decode_result_value(json.loads(result_json))
-
-
-def _write_history_header() -> None:
-    """Write the current schema header to the local history file."""
-    with HISTORY_PATH.open("w", newline="", encoding="utf-8") as csv_file:
-        writer = csv.writer(csv_file)
-        writer.writerow(HISTORY_COLUMNS)
-
-
-def _migrate_legacy_history_file() -> None:
-    """Upgrade older history CSV schemas while preserving their stored rows."""
-    if not HISTORY_PATH.exists():
-        _write_history_header()
-        return
-
-    with HISTORY_PATH.open("r", newline="", encoding="utf-8") as csv_file:
-        rows = list(csv.reader(csv_file))
-
-    if not rows:
-        _write_history_header()
-        return
-
-    if [column.strip().lower() for column in rows[0]] == HISTORY_COLUMNS:
-        return
-
-    old_columns = [column.strip().lower() for column in rows[0]]
-    if old_columns and old_columns[0].lower() != "user_id":
-        old_columns = ["user_id", *old_columns]
-
-    migrated_rows = []
-    for row in rows[1:]:
-        if not row:
-            continue
-        if old_columns[0] == "user_id" and len(row) == len(old_columns) - 1:
-            row = ["", *row]
-        if len(row) < len(old_columns):
-            row.extend([""] * (len(old_columns) - len(row)))
-        old_record = dict(zip(old_columns, row))
-        if not old_record.get("history_id"):
-            old_record["history_id"] = str(uuid5(
-                NAMESPACE_URL,
-                "|".join(old_record.get(column, "") for column in old_columns),
-            ))
-        migrated_rows.append([old_record.get(column, "") for column in HISTORY_COLUMNS])
-
-    with HISTORY_PATH.open("w", newline="", encoding="utf-8") as csv_file:
-        writer = csv.writer(csv_file)
-        writer.writerow(HISTORY_COLUMNS)
-        writer.writerows(migrated_rows)
-
-
-def _ensure_history_file() -> Path:
-    """Create the local history directory and CSV header when needed."""
-    HISTORY_DIR.mkdir(parents=True, exist_ok=True)
-    if not HISTORY_PATH.exists():
-        _write_history_header()
-    else:
-        _migrate_legacy_history_file()
-    return HISTORY_PATH
-
-
-def _normalize_history_entry(row: dict[str, str]) -> Optional[dict[str, str]]:
-    """Convert a stored CSV row into a display-ready search record."""
-    user_id = (row.get("user_id") or "").strip()
-    history_id = (row.get("history_id") or "").strip()
-    search_type = (row.get("search_type") or "").strip().lower()
-    primary_ticker = (row.get("primary_ticker") or "").strip().upper()
-    secondary_ticker = (row.get("secondary_ticker") or "").strip().upper()
-    primary_name = (row.get("primary_name") or "").strip()
-    secondary_name = (row.get("secondary_name") or "").strip()
-    timestamp = (row.get("timestamp_utc") or "").strip()
-    analysis_type = (row.get("analysis_type") or "").strip().lower()
-    if analysis_type not in {"all", "filings", "news", "stock price ratings"}:
-        analysis_type = "stock price ratings"
-    result = _deserialize_result((row.get("result_json") or "").strip())
-    if not history_id:
-        history_id = str(uuid5(
-            NAMESPACE_URL,
-            "|".join([
-                search_type,
-                timestamp,
-                primary_ticker,
-                secondary_ticker,
-                analysis_type,
-            ]),
-        ))
+def _normalize_history_entry(row: dict) -> Optional[dict]:
+    """Map one PostgreSQL row into the display shape used by Recently Viewed."""
+    search_type = row["search_type"]
+    primary_ticker = row["primary_ticker"]
+    secondary_ticker = row["secondary_ticker"]
+    primary_name = row["primary_name"]
+    secondary_name = row["secondary_name"]
 
     if search_type == "single":
-        if not primary_ticker:
-            return None
-        return {
-            "user_id": user_id,
-            "history_id": history_id,
-            "timestamp": timestamp,
-            "search_type": "Company search",
-            "company_name": primary_name or primary_ticker,
-            "ticker_value": primary_ticker,
-            "primary_ticker": primary_ticker,
-            "secondary_ticker": "",
-            "primary_name": primary_name,
-            "secondary_name": "",
-            "analysis_type": analysis_type,
-            "result": result,
-        }
+        display_type = "Company search"
+        company_name = primary_name or primary_ticker
+        ticker_value = primary_ticker
+    elif search_type == "comparison":
+        display_type = "Company comparison"
+        company_name = (
+            f"{primary_name or primary_ticker} vs "
+            f"{secondary_name or secondary_ticker}"
+        )
+        ticker_value = f"{primary_ticker} vs {secondary_ticker}".strip(" vs ")
+    else:
+        return None
 
-    if search_type == "comparison":
-        if not primary_ticker and not secondary_ticker:
-            return None
-        name_one = primary_name or primary_ticker or "Unknown company"
-        name_two = secondary_name or secondary_ticker or "Unknown company"
-        return {
-            "user_id": user_id,
-            "history_id": history_id,
-            "timestamp": timestamp,
-            "search_type": "Company comparison",
-            "company_name": f"{name_one} vs {name_two}",
-            "ticker_value": f"{primary_ticker} vs {secondary_ticker}".strip(" vs "),
-            "primary_ticker": primary_ticker,
-            "secondary_ticker": secondary_ticker,
-            "primary_name": primary_name,
-            "secondary_name": secondary_name,
-            "analysis_type": "comparison",
-            "result": result,
-        }
+    timestamp = row["timestamp_utc"]
+    if isinstance(timestamp, datetime):
+        timestamp = timestamp.astimezone(timezone.utc).isoformat()
 
-    return None
+    result = row["result_json"]
+    if isinstance(result, str):
+        result = json.loads(result)
+
+    return {
+        "search_id": str(row["search_id"]),
+        "user_id": row["user_id"],
+        "timestamp": str(timestamp),
+        "search_type": display_type,
+        "company_name": company_name,
+        "ticker_value": ticker_value,
+        "primary_ticker": primary_ticker,
+        "secondary_ticker": secondary_ticker,
+        "primary_name": primary_name,
+        "secondary_name": secondary_name,
+        "analysis_type": row["analysis_type"],
+        "result": _decode_result_value(result) if result is not None else None,
+    }
 
 
 def record_search(
@@ -196,77 +88,83 @@ def record_search(
     secondary_ticker: Optional[str] = None,
     primary_name: str = "",
     secondary_name: str = "",
-    user_id: Optional[str] = None,
+    user_id: str = "",
     analysis_type: str = "",
     result=None,
 ) -> str:
-    """Append a single search to the local CSV history file and return its ID."""
+    """Persist one search for a demo user and return its stable search ID."""
+    user_id = (user_id or "").strip()
+    if user_id not in DEMO_USERS:
+        raise ValueError("A valid demo user is required to save search history.")
+
     primary = (primary_ticker or "").strip().upper()
     secondary = (secondary_ticker or "").strip().upper()
+    if not primary:
+        raise ValueError("A primary ticker is required to save search history.")
+    if search_type not in {"single", "comparison"}:
+        raise ValueError("Search type must be 'single' or 'comparison'.")
 
-    if not primary and not secondary:
-        return ""
+    search_id = uuid4()
+    encoded_result = (
+        Jsonb(_encode_result_value(result))
+        if result is not None
+        else None
+    )
+    ensure_schema()
+    with connect() as connection:
+        with connection.cursor() as cursor:
+            cursor.execute(
+                """
+                INSERT INTO search_history (
+                    search_id, user_id, search_type, primary_ticker,
+                    secondary_ticker, primary_name, secondary_name,
+                    analysis_type, result_json
+                )
+                VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s)
+                """,
+                (
+                    search_id,
+                    user_id,
+                    search_type,
+                    primary,
+                    secondary,
+                    (primary_name or "").strip(),
+                    (secondary_name or "").strip(),
+                    (analysis_type or "").strip().lower(),
+                    encoded_result,
+                ),
+            )
+    return str(search_id)
 
-    normalized_type = "single" if search_type == "single" else "comparison"
-    file_path = _ensure_history_file()
-    timestamp = datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
-    history_id = str(uuid4())
 
-    with file_path.open("a", newline="", encoding="utf-8") as csv_file:
-        writer = csv.writer(csv_file)
-        writer.writerow([
-            (user_id or "").strip(),
-            history_id,
-            timestamp,
-            normalized_type,
-            primary,
-            secondary,
-            (primary_name or "").strip(),
-            (secondary_name or "").strip(),
-            (analysis_type or "").strip().lower(),
-            _serialize_result(result),
-        ])
+def load_history(user_id: str) -> pd.DataFrame:
+    """Load history belonging only to the selected demo user."""
+    if user_id not in DEMO_USERS:
+        raise ValueError("A valid demo user is required to load search history.")
 
-    return history_id
+    ensure_schema()
+    with connect() as connection:
+        with connection.cursor() as cursor:
+            cursor.execute(
+                """
+                SELECT search_id, user_id, timestamp_utc, search_type,
+                       primary_ticker, secondary_ticker, primary_name,
+                       secondary_name, analysis_type, result_json
+                FROM search_history
+                WHERE user_id = %s
+                ORDER BY timestamp_utc DESC, search_id DESC
+                """,
+                (user_id,),
+            )
+            rows = cursor.fetchall()
 
-
-def load_history(user_id: Optional[str] = None) -> pd.DataFrame:
-    """Read locally saved searches and return a DataFrame for the UI."""
-    file_path = _ensure_history_file()
-    rows: list[dict[str, str]] = []
-
-    if not file_path.exists():
-        return pd.DataFrame(columns=[
-            "user_id",
-            "history_id",
-            "timestamp",
-            "search_type",
-            "company_name",
-            "ticker_value",
-            "primary_ticker",
-            "secondary_ticker",
-            "primary_name",
-            "secondary_name",
-            "analysis_type",
-            "result",
-        ])
-
-    with file_path.open("r", newline="", encoding="utf-8") as csv_file:
-        reader = csv.DictReader(csv_file)
-        for row in reader:
-            if not row:
-                continue
-            if user_id is not None:
-                stored_user_id = (row.get("user_id") or "").strip()
-                if stored_user_id and stored_user_id != user_id:
-                    continue
-                if not stored_user_id and row.get("timestamp_utc"):
-                    continue
-            normalized = _normalize_history_entry(row)
-            if normalized is not None:
-                rows.append(normalized)
-
-    frame = pd.DataFrame(rows, columns=[
+    normalized = [
+        entry
+        for row in rows
+        if (entry := _normalize_history_entry(row)) is not None
+    ]
+    return pd.DataFrame(normalized, columns=[
+        "search_id",
         "user_id",
         "history_id",
         "timestamp",
@@ -280,7 +178,3 @@ def load_history(user_id: Optional[str] = None) -> pd.DataFrame:
         "analysis_type",
         "result",
     ])
-    if frame.empty:
-        return frame
-    frame = frame.sort_values("timestamp", ascending=False, kind="mergesort").reset_index(drop=True)
-    return frame

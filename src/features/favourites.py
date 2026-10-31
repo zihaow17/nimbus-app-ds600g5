@@ -66,7 +66,7 @@ def show_favourite_companies() -> Optional[str]:
                 if st.button(
                     f"{ticker} {price_label}",
                     key=f"favourite_{ticker.lower()}",
-                    use_container_width=True,
+                    width="stretch",
                 ):
                     selected_ticker = ticker
 

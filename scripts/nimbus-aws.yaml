@@ -1,19 +1,27 @@
 # CloudFormation template for a student-friendly AWS networking lab.
-# This environment creates a VPC, public/private subnets in two AZs, routing,
-# a security group, and an EC2 instance that deploys the Nimbus Streamlit app.
-# The app is configured to run on port 8501 and is reachable from the internet.
+# This environment creates public app and private database subnets in two AZs,
+# then deploys Nimbus on EC2 with a private PostgreSQL RDS database.
 
 AWSTemplateFormatVersion: '2010-09-09'
 Description: >-
-  Create a VPC, subnets, security group, internet gateway, NAT gateway, and an EC2
-  instance that clones the Nimbus app repository, installs dependencies in a Python
-  virtual environment, and runs the app on port 8501.
+  Create a VPC, public and private subnets, an internet gateway, a private PostgreSQL
+  database, and an EC2 instance that deploys the Nimbus Streamlit app.
 
 Parameters:
   GitHubRepoUrl:
     Type: String
     Description: Git repository URL for the Nimbus app to clone onto the EC2 instance.
     Default: https://github.com/zihaow17/nimbus-app-ds600g5.git
+    AllowedPattern: ^https://github\.com/[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+(\.git)?$
+
+  AllowedClientCidr:
+    Type: String
+    Description: CIDR allowed to reach SSH and Streamlit, e.g. your public IPv4 address with /32.
+
+  LatestAmiId:
+    Type: AWS::SSM::Parameter::Value<AWS::EC2::Image::Id>
+    Default: /aws/service/ami-amazon-linux-latest/al2023-ami-kernel-default-x86_64
+    Description: Latest Amazon Linux 2023 x86_64 AMI from the public SSM parameter.
 
   KeyPairName:
     Type: AWS::EC2::KeyPair::KeyName
@@ -127,32 +135,6 @@ Resources:
         - Key: Name
           Value: lab-rtb-private1-us-east-1a
 
-  NatEip:
-    Type: AWS::EC2::EIP
-    DependsOn: NimbusInternetGatewayAttachment
-    Properties:
-      Domain: vpc
-      Tags:
-        - Key: Name
-          Value: lab-eip-nat-public1-us-east-1a
-
-  NatGateway:
-    Type: AWS::EC2::NatGateway
-    DependsOn: NimbusInternetGatewayAttachment
-    Properties:
-      AllocationId: !GetAtt NatEip.AllocationId
-      SubnetId: !Ref PublicSubnet1
-      Tags:
-        - Key: Name
-          Value: lab-nat-public1-us-east-1a
-
-  PrivateRoute:
-    Type: AWS::EC2::Route
-    Properties:
-      RouteTableId: !Ref PrivateRouteTable
-      DestinationCidrBlock: 0.0.0.0/0
-      NatGatewayId: !Ref NatGateway
-
   PrivateSubnet1RouteTableAssociation:
     Type: AWS::EC2::SubnetRouteTableAssociation
     Properties:
@@ -178,16 +160,106 @@ Resources:
         - IpProtocol: tcp
           FromPort: 22
           ToPort: 22
-          CidrIp: 0.0.0.0/0
+          CidrIp: !Ref AllowedClientCidr
           Description: SSH access
         - IpProtocol: tcp
           FromPort: 8501
           ToPort: 8501
-          CidrIp: 0.0.0.0/0
+          CidrIp: !Ref AllowedClientCidr
           Description: Streamlit app access on port 8501
       Tags:
         - Key: Name
           Value: Nimbus Web Security Group
+
+  NimbusDatabaseSecurityGroup:
+    Type: AWS::EC2::SecurityGroup
+    Properties:
+      GroupDescription: Allow PostgreSQL access from the Nimbus EC2 app only
+      VpcId: !Ref NimbusVpc
+      SecurityGroupIngress:
+        - IpProtocol: tcp
+          FromPort: 5432
+          ToPort: 5432
+          SourceSecurityGroupId: !Ref NimbusWebSecurityGroup
+          Description: PostgreSQL from Nimbus web server
+      Tags:
+        - Key: Name
+          Value: Nimbus Database Security Group
+
+  NimbusDatabaseSubnetGroup:
+    Type: AWS::RDS::DBSubnetGroup
+    Properties:
+      DBSubnetGroupDescription: Private subnets for Nimbus PostgreSQL
+      SubnetIds:
+        - !Ref PrivateSubnet1
+        - !Ref PrivateSubnet2
+      Tags:
+        - Key: Name
+          Value: Nimbus Database Subnets
+
+  NimbusDatabaseSecret:
+    Type: AWS::SecretsManager::Secret
+    Properties:
+      Description: Master credentials for Nimbus PostgreSQL
+      GenerateSecretString:
+        SecretStringTemplate: '{"username":"nimbus_admin"}'
+        GenerateStringKey: password
+        PasswordLength: 32
+        ExcludePunctuation: true
+      Tags:
+        - Key: Name
+          Value: Nimbus Database Credentials
+
+  NimbusDatabase:
+    Type: AWS::RDS::DBInstance
+    DeletionPolicy: Delete
+    UpdateReplacePolicy: Delete
+    Properties:
+      Engine: postgres
+      DBInstanceClass: db.t3.micro
+      AllocatedStorage: '20'
+      StorageType: gp3
+      StorageEncrypted: true
+      DBName: nimbus
+      MasterUsername: !Sub '{{resolve:secretsmanager:${NimbusDatabaseSecret}:SecretString:username}}'
+      MasterUserPassword: !Sub '{{resolve:secretsmanager:${NimbusDatabaseSecret}:SecretString:password}}'
+      DBSubnetGroupName: !Ref NimbusDatabaseSubnetGroup
+      VPCSecurityGroups:
+        - !GetAtt NimbusDatabaseSecurityGroup.GroupId
+      PubliclyAccessible: false
+      MultiAZ: false
+      BackupRetentionPeriod: 0
+      DeletionProtection: false
+      AutoMinorVersionUpgrade: true
+      Tags:
+        - Key: Name
+          Value: Nimbus PostgreSQL Database
+
+  NimbusEc2Role:
+    Type: AWS::IAM::Role
+    Properties:
+      AssumeRolePolicyDocument:
+        Version: '2012-10-17'
+        Statement:
+          - Effect: Allow
+            Principal:
+              Service: ec2.amazonaws.com
+            Action: sts:AssumeRole
+      Policies:
+        - PolicyName: ReadNimbusDatabaseSecret
+          PolicyDocument:
+            Version: '2012-10-17'
+            Statement:
+              - Effect: Allow
+                Action:
+                  - secretsmanager:GetSecretValue
+                Resource: !Ref NimbusDatabaseSecret
+
+  NimbusInstanceProfile:
+    Type: AWS::IAM::InstanceProfile
+    Properties:
+      Roles:
+        - !Ref NimbusEc2Role
 
   # ---------------------------------------------------------------------------
   # EC2 instance for the app
@@ -195,10 +267,11 @@ Resources:
   NimbusWebServer:
     Type: AWS::EC2::Instance
     Properties:
-      ImageId: ami-0fef201115eefe936
+      ImageId: !Ref LatestAmiId
       InstanceType: t2.micro
       KeyName: !Ref KeyPairName
       SubnetId: !Ref PublicSubnet2
+      IamInstanceProfile: !Ref NimbusInstanceProfile
       SecurityGroupIds:
         - !Ref NimbusWebSecurityGroup
       UserData:
@@ -218,7 +291,7 @@ Resources:
           mkdir -p /home/ec2-user/app
           chown -R ec2-user:ec2-user /home/ec2-user
 
-          sudo -u ec2-user bash -lc 'cd /home/ec2-user && if [ ! -d /home/ec2-user/nimbus-app ]; then git clone ${GitHubRepoUrl} /home/ec2-user/nimbus-app; fi'
+          sudo -u ec2-user bash -lc 'cd /home/ec2-user && if [ ! -d /home/ec2-user/nimbus-app ]; then git clone "${GitHubRepoUrl}" /home/ec2-user/nimbus-app; fi'
 
           sudo -u ec2-user bash -lc '
             set -eux
@@ -227,8 +300,33 @@ Resources:
             . .venv/bin/activate
             python -m pip install --upgrade pip
             python -m pip install -r requirements.txt
-            nohup python -m streamlit run src/app.py --server.address 0.0.0.0 --server.port 8501 >/tmp/nimbus-streamlit.log 2>&1 &
           '
+
+          cat >/etc/systemd/system/nimbus.service <<'EOF'
+          [Unit]
+          Description=Nimbus Streamlit application
+          After=network-online.target
+          Wants=network-online.target
+
+          [Service]
+          Type=simple
+          User=ec2-user
+          WorkingDirectory=/home/ec2-user/nimbus-app
+          Environment="NIMBUS_DB_HOST=${NimbusDatabase.Endpoint.Address}"
+          Environment="NIMBUS_DB_PORT=${NimbusDatabase.Endpoint.Port}"
+          Environment="NIMBUS_DB_NAME=nimbus"
+          Environment="NIMBUS_DB_SECRET_ARN=${NimbusDatabaseSecret}"
+          Environment="NIMBUS_AWS_REGION=${AWS::Region}"
+          ExecStart=/home/ec2-user/nimbus-app/.venv/bin/python -m streamlit run src/app.py --server.address 0.0.0.0 --server.port 8501
+          Restart=on-failure
+          RestartSec=10
+
+          [Install]
+          WantedBy=multi-user.target
+          EOF
+
+          systemctl daemon-reload
+          systemctl enable --now nimbus.service
       Tags:
         - Key: Name
           Value: Web Server 1
@@ -245,3 +343,11 @@ Outputs:
   StreamlitUrl:
     Description: URL for the deployed Streamlit app
     Value: !Sub http://${NimbusWebServer.PublicDnsName}:8501
+
+  DatabaseEndpoint:
+    Description: Private PostgreSQL endpoint for the Nimbus app
+    Value: !GetAtt NimbusDatabase.Endpoint.Address
+
+  DatabasePort:
+    Description: PostgreSQL port
+    Value: !GetAtt NimbusDatabase.Endpoint.Port
