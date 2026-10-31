@@ -24,7 +24,7 @@ st.set_page_config(
 
 show_loading_screen()
 
-# Require the configured PostgreSQL database before rendering pages that depend on it.
+# Require the configured MySQL database before rendering pages that depend on it.
 try:
     ensure_schema()
 except Exception as error:

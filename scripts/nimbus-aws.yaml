@@ -1,10 +1,10 @@
 # CloudFormation template for a student-friendly AWS networking lab.
 # This environment creates public app and private database subnets in two AZs,
-# then deploys Nimbus on EC2 with a private PostgreSQL RDS database.
+# then deploys Nimbus on EC2 with a private MySQL RDS database.
 
 AWSTemplateFormatVersion: '2010-09-09'
 Description: >-
-  Create a VPC, public and private subnets, an internet gateway, a private PostgreSQL
+  Create a VPC, public and private subnets, an internet gateway, a private MySQL
   database, and an EC2 instance that deploys the Nimbus Streamlit app.
 
 Parameters:
@@ -27,6 +27,21 @@ Parameters:
     Type: AWS::EC2::KeyPair::KeyName
     Description: Existing EC2 Key Pair to use for SSH access.
     Default: vockey
+
+  DatabaseMasterUsername:
+    Type: String
+    Default: main
+    AllowedPattern: ^[A-Za-z][A-Za-z0-9_]{0,15}$
+    Description: MySQL administrator and application username for this demo.
+
+  DatabaseMasterPassword:
+    Type: String
+    Default: password
+    NoEcho: true
+    MinLength: 8
+    MaxLength: 41
+    AllowedPattern: '^[A-Za-z0-9]{8,41}$'
+    Description: MySQL administrator and application password; use alphanumeric characters only.
 
 Resources:
   # ---------------------------------------------------------------------------
@@ -174,14 +189,14 @@ Resources:
   NimbusDatabaseSecurityGroup:
     Type: AWS::EC2::SecurityGroup
     Properties:
-      GroupDescription: Allow PostgreSQL access from the Nimbus EC2 app only
+      GroupDescription: Allow MySQL access from the Nimbus EC2 app only
       VpcId: !Ref NimbusVpc
       SecurityGroupIngress:
         - IpProtocol: tcp
-          FromPort: 5432
-          ToPort: 5432
+          FromPort: 3306
+          ToPort: 3306
           SourceSecurityGroupId: !Ref NimbusWebSecurityGroup
-          Description: PostgreSQL from Nimbus web server
+          Description: MySQL from Nimbus web server
       Tags:
         - Key: Name
           Value: Nimbus Database Security Group
@@ -189,7 +204,7 @@ Resources:
   NimbusDatabaseSubnetGroup:
     Type: AWS::RDS::DBSubnetGroup
     Properties:
-      DBSubnetGroupDescription: Private subnets for Nimbus PostgreSQL
+      DBSubnetGroupDescription: Private subnets for Nimbus MySQL
       SubnetIds:
         - !Ref PrivateSubnet1
         - !Ref PrivateSubnet2
@@ -197,32 +212,19 @@ Resources:
         - Key: Name
           Value: Nimbus Database Subnets
 
-  NimbusDatabaseSecret:
-    Type: AWS::SecretsManager::Secret
-    Properties:
-      Description: Master credentials for Nimbus PostgreSQL
-      GenerateSecretString:
-        SecretStringTemplate: '{"username":"nimbus_admin"}'
-        GenerateStringKey: password
-        PasswordLength: 32
-        ExcludePunctuation: true
-      Tags:
-        - Key: Name
-          Value: Nimbus Database Credentials
-
   NimbusDatabase:
     Type: AWS::RDS::DBInstance
     DeletionPolicy: Delete
     UpdateReplacePolicy: Delete
     Properties:
-      Engine: postgres
+      Engine: mysql
       DBInstanceClass: db.t3.micro
       AllocatedStorage: '20'
       StorageType: gp3
-      StorageEncrypted: true
+      StorageEncrypted: false
       DBName: nimbus
-      MasterUsername: !Sub '{{resolve:secretsmanager:${NimbusDatabaseSecret}:SecretString:username}}'
-      MasterUserPassword: !Sub '{{resolve:secretsmanager:${NimbusDatabaseSecret}:SecretString:password}}'
+      MasterUsername: !Ref DatabaseMasterUsername
+      MasterUserPassword: !Ref DatabaseMasterPassword
       DBSubnetGroupName: !Ref NimbusDatabaseSubnetGroup
       VPCSecurityGroups:
         - !GetAtt NimbusDatabaseSecurityGroup.GroupId
@@ -233,33 +235,7 @@ Resources:
       AutoMinorVersionUpgrade: true
       Tags:
         - Key: Name
-          Value: Nimbus PostgreSQL Database
-
-  NimbusEc2Role:
-    Type: AWS::IAM::Role
-    Properties:
-      AssumeRolePolicyDocument:
-        Version: '2012-10-17'
-        Statement:
-          - Effect: Allow
-            Principal:
-              Service: ec2.amazonaws.com
-            Action: sts:AssumeRole
-      Policies:
-        - PolicyName: ReadNimbusDatabaseSecret
-          PolicyDocument:
-            Version: '2012-10-17'
-            Statement:
-              - Effect: Allow
-                Action:
-                  - secretsmanager:GetSecretValue
-                Resource: !Ref NimbusDatabaseSecret
-
-  NimbusInstanceProfile:
-    Type: AWS::IAM::InstanceProfile
-    Properties:
-      Roles:
-        - !Ref NimbusEc2Role
+          Value: Nimbus MySQL Database
 
   # ---------------------------------------------------------------------------
   # EC2 instance for the app
@@ -271,13 +247,12 @@ Resources:
       InstanceType: t2.micro
       KeyName: !Ref KeyPairName
       SubnetId: !Ref PublicSubnet2
-      IamInstanceProfile: !Ref NimbusInstanceProfile
       SecurityGroupIds:
         - !Ref NimbusWebSecurityGroup
       UserData:
         Fn::Base64: !Sub |
           #!/bin/bash
-          set -eux
+          set -eu
 
           # Amazon Linux 2023 compatibility: yum is usually available as a compatibility
           # alias, but dnf is the native package manager. This makes the bootstrap robust.
@@ -302,6 +277,17 @@ Resources:
             python -m pip install -r requirements.txt
           '
 
+          install -d -m 0700 /etc/nimbus
+          cat >/etc/nimbus/nimbus.env <<'EOF'
+          NIMBUS_DB_HOST=${NimbusDatabase.Endpoint.Address}
+          NIMBUS_DB_PORT=${NimbusDatabase.Endpoint.Port}
+          NIMBUS_DB_NAME=nimbus
+          NIMBUS_DB_USER=${DatabaseMasterUsername}
+          NIMBUS_DB_PASSWORD=${DatabaseMasterPassword}
+          NIMBUS_DB_SSL_CA=/etc/pki/tls/certs/rds-global-bundle.pem
+          EOF
+          chmod 0600 /etc/nimbus/nimbus.env
+
           cat >/etc/systemd/system/nimbus.service <<'EOF'
           [Unit]
           Description=Nimbus Streamlit application
@@ -312,11 +298,7 @@ Resources:
           Type=simple
           User=ec2-user
           WorkingDirectory=/home/ec2-user/nimbus-app
-          Environment="NIMBUS_DB_HOST=${NimbusDatabase.Endpoint.Address}"
-          Environment="NIMBUS_DB_PORT=${NimbusDatabase.Endpoint.Port}"
-          Environment="NIMBUS_DB_NAME=nimbus"
-          Environment="NIMBUS_DB_SECRET_ARN=${NimbusDatabaseSecret}"
-          Environment="NIMBUS_AWS_REGION=${AWS::Region}"
+          EnvironmentFile=/etc/nimbus/nimbus.env
           ExecStart=/home/ec2-user/nimbus-app/.venv/bin/python -m streamlit run src/app.py --server.address 0.0.0.0 --server.port 8501
           Restart=on-failure
           RestartSec=10
@@ -325,6 +307,8 @@ Resources:
           WantedBy=multi-user.target
           EOF
 
+          curl -fsSLo /etc/pki/tls/certs/rds-global-bundle.pem https://truststore.pki.rds.amazonaws.com/global/global-bundle.pem
+          chmod 0644 /etc/pki/tls/certs/rds-global-bundle.pem
           systemctl daemon-reload
           systemctl enable --now nimbus.service
       Tags:
@@ -345,9 +329,9 @@ Outputs:
     Value: !Sub http://${NimbusWebServer.PublicDnsName}:8501
 
   DatabaseEndpoint:
-    Description: Private PostgreSQL endpoint for the Nimbus app
+    Description: Private MySQL endpoint for the Nimbus app
     Value: !GetAtt NimbusDatabase.Endpoint.Address
 
   DatabasePort:
-    Description: PostgreSQL port
+    Description: MySQL port
     Value: !GetAtt NimbusDatabase.Endpoint.Port

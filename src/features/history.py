@@ -1,4 +1,4 @@
-"""PostgreSQL persistence for company-search and comparison history."""
+"""MySQL persistence for company-search and comparison history."""
 
 from __future__ import annotations
 
@@ -9,13 +9,12 @@ from typing import Optional
 from uuid import uuid4
 
 import pandas as pd
-from psycopg.types.json import Jsonb
 
 from database import DEMO_USERS, connect, ensure_schema
 
 
 def _encode_result_value(value):
-    """Represent DataFrames as JSON-safe markers before storing results in JSONB."""
+    """Represent DataFrames as JSON-safe markers before storing results in JSON."""
     if isinstance(value, pd.DataFrame):
         return {"__dataframe__": value.to_json(orient="split", date_format="iso")}
     if isinstance(value, dict):
@@ -37,7 +36,7 @@ def _decode_result_value(value):
 
 
 def _normalize_history_entry(row: dict) -> Optional[dict]:
-    """Map one PostgreSQL row into the display shape used by Recently Viewed."""
+    """Map one MySQL row into the display shape used by Recently Viewed."""
     search_type = row["search_type"]
     primary_ticker = row["primary_ticker"]
     secondary_ticker = row["secondary_ticker"]
@@ -60,6 +59,8 @@ def _normalize_history_entry(row: dict) -> Optional[dict]:
 
     timestamp = row["timestamp_utc"]
     if isinstance(timestamp, datetime):
+        if timestamp.tzinfo is None:
+            timestamp = timestamp.replace(tzinfo=timezone.utc)
         timestamp = timestamp.astimezone(timezone.utc).isoformat()
 
     result = row["result_json"]
@@ -106,13 +107,13 @@ def record_search(
 
     search_id = uuid4()
     encoded_result = (
-        Jsonb(_encode_result_value(result))
+        json.dumps(_encode_result_value(result))
         if result is not None
         else None
     )
     ensure_schema()
     with connect() as connection:
-        with connection.cursor() as cursor:
+        with connection.cursor(dictionary=True) as cursor:
             cursor.execute(
                 """
                 INSERT INTO search_history (
@@ -123,7 +124,7 @@ def record_search(
                 VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s)
                 """,
                 (
-                    search_id,
+                    str(search_id),
                     user_id,
                     search_type,
                     primary,
@@ -134,6 +135,7 @@ def record_search(
                     encoded_result,
                 ),
             )
+            connection.commit()
     return str(search_id)
 
 
@@ -144,7 +146,7 @@ def load_history(user_id: str) -> pd.DataFrame:
 
     ensure_schema()
     with connect() as connection:
-        with connection.cursor() as cursor:
+        with connection.cursor(dictionary=True) as cursor:
             cursor.execute(
                 """
                 SELECT search_id, user_id, timestamp_utc, search_type,
@@ -166,7 +168,6 @@ def load_history(user_id: str) -> pd.DataFrame:
     return pd.DataFrame(normalized, columns=[
         "search_id",
         "user_id",
-        "history_id",
         "timestamp",
         "search_type",
         "company_name",
