@@ -1,5 +1,6 @@
 """Company-comparison UI, cached Yahoo Finance lookups, and chart/metric rendering."""
 from datetime import datetime, timezone
+from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 from html import escape
 import math

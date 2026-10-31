@@ -5,17 +5,18 @@ from html import escape
 from pathlib import Path
 
 import streamlit as st
-import yfinance as yf
 
 from analysis import (
     get_analyst_ratings,
+    get_financials,
     get_news,
     get_financial_currency,
+    get_price,
 )
 
 from features.company_comparison import (
     _company_logo,
-    company_info,
+    company_info as cached_company_info,
 )
 from features.company_overview import show_company_overview
 from features.favourites import show_favourite_companies
@@ -52,6 +53,40 @@ RESULT_VIEW_LABELS = {
     "filings": "Financial statements",
     "news": "Recent news",
 }
+
+
+@st.cache_data(ttl=900, show_spinner=False)
+def cached_company_name(ticker):
+    """Return a cached display name for a ticker."""
+
+    info = cached_company_info(ticker) or {}
+    return (
+        info.get("shortName")
+        or info.get("longName")
+        or ticker
+    )
+
+
+@st.cache_data(ttl=900, show_spinner=False)
+def cached_financial_currency(ticker):
+    """Return the cached reporting currency for a ticker."""
+
+    return get_financial_currency(ticker)
+
+
+@st.cache_data(ttl=900, show_spinner=False)
+def cached_news(ticker):
+    """Return cached recent news for a ticker."""
+
+    return get_news(ticker)
+
+
+@st.cache_data(ttl=900, show_spinner=False)
+def cached_analyst_ratings(ticker):
+    """Return cached analyst ratings for a ticker."""
+
+    return get_analyst_ratings(ticker)
+
 
 # Keep the company identity card visually consistent with the comparison page.
 COMPANY_IDENTITY_CSS = """
@@ -202,7 +237,15 @@ def _run_single_search(ticker):
 
     st.session_state.pop("company_search_history_id", None)
     st.session_state.pop("company_search_user_id", None)
-    company_name = _company_name_for_ticker(ticker)
+    try:
+        company_name = _company_name_for_ticker(ticker)
+    except Exception as error:
+        st.warning(
+            "Company name could not be loaded. The ticker will be used instead."
+        )
+        st.caption(f"Details: {error}")
+        company_name = ticker
+
     try:
         with st.spinner(f"Loading financial statements, recent news, and stock data for {ticker}..."):
             result = {"analysis_type": "all", "errors": {}}
