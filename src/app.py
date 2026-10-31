@@ -1,9 +1,10 @@
-"""Streamlit homepage for the financial data explorer."""
+"""Nimbus entry point: initialize persistence, render shared navigation, then the active page."""
 
 from pathlib import Path
 
 import streamlit as st
 
+from database import DEMO_USERS, ensure_schema
 from features.company_comparison import show_company_comparison
 from features.loading_screen import show_loading_screen
 from features.company_search import show_company_search_page
@@ -23,6 +24,14 @@ st.set_page_config(
 
 show_loading_screen()
 
+# Require the configured PostgreSQL database before rendering pages that depend on it.
+try:
+    ensure_schema()
+except Exception as error:
+    st.error(f"Could not connect to the Nimbus database: {error}")
+    st.stop()
+
+# Shared desktop/mobile styling for the app shell and its feature pages.
 st.markdown(
     """
     <style>
@@ -305,15 +314,44 @@ st.markdown(
     unsafe_allow_html=True,
 )
 
-brand_column, spacer_column, account_column, settings_column = st.columns([5, 5.5, 1.2, 0.5])
+def _switch_demo_user() -> None:
+    """Clear active user-specific results while retaining that user's session drafts."""
+    for key in (
+        "company_search_results",
+        "company_search_history_id",
+        "company_search_user_id",
+        "nimbus_comparison_results",
+        "nimbus_comparison_history_id",
+        "nimbus_comparison_user_id",
+        "history_popup_record",
+        "notes_context_key",
+        "notes_dialog_open",
+    ):
+        st.session_state.pop(key, None)
+    st.session_state["recent_history_visible_count"] = 5
+
+
+# Select one of the fixed demo identities; this is a data partition, not authentication.
+if "current_user_id" not in st.session_state:
+    st.session_state["current_user_id"] = next(iter(DEMO_USERS))
+
+brand_column, spacer_column, account_column, settings_column = st.columns([5, 5.5, 2, 0.5])
 with brand_column:
     st.markdown('<div class="topbar-brand">NIMBUS</div>', unsafe_allow_html=True)
 with account_column:
-    st.markdown('<div class="topbar-action">👤 Account</div>', unsafe_allow_html=True)
+    st.selectbox(
+        "Demo user",
+        list(DEMO_USERS),
+        format_func=DEMO_USERS.get,
+        key="current_user_id",
+        on_change=_switch_demo_user,
+        label_visibility="collapsed",
+    )
 with settings_column:
     st.markdown('<div class="topbar-action">⚙</div>', unsafe_allow_html=True)
 
 st.markdown('<div class="header-rule"></div>', unsafe_allow_html=True)
+# Keep desktop and mobile navigation widgets synchronized through one session-state value.
 page_options = ("Company Search", "Company Comparison", "Recently Viewed")
 
 

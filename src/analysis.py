@@ -1,4 +1,4 @@
-"""Reusable financial-data functions based on the project notebooks."""
+"""Yahoo Finance data-access functions shared by search and comparison features."""
 
 import pandas as pd
 import yfinance as yf

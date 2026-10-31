@@ -1,5 +1,5 @@
 
-"""Company search page and result rendering."""
+"""Company Search UI, Yahoo Finance orchestration, and rendering of stored results."""
 
 import base64
 from html import escape
@@ -25,6 +25,8 @@ RESULT_VIEW_LABELS = {
     "news": "Recent news",
     "stock price ratings": "Stock price and analyst ratings",
 }
+
+# Keep the company identity card visually consistent with the comparison page.
 COMPANY_IDENTITY_CSS = """
 <style>
 .nimbus-logo-wrap {display:inline-flex;width:48px;height:48px;align-items:center;justify-content:center;flex-shrink:0;}
@@ -52,6 +54,7 @@ def _company_identity_html(ticker: str, info: dict, company_name: str) -> str:
 
 
 def _uppercase_search_ticker() -> None:
+    """Normalize the ticker field as the user types."""
     ticker = st.session_state.get("company_search_ticker", "")
     st.session_state["company_search_ticker"] = ticker.upper()
 
@@ -75,6 +78,8 @@ def _run_single_search(ticker: str) -> None:
         st.error("Enter a ticker symbol before running an analysis.")
         return
 
+    st.session_state.pop("company_search_history_id", None)
+    st.session_state.pop("company_search_user_id", None)
     company_name = _company_name_for_ticker(ticker)
     try:
         with st.spinner(f"Loading financial statements, recent news, and stock data for {ticker}..."):
@@ -90,23 +95,33 @@ def _run_single_search(ticker: str) -> None:
                 except Exception as error:
                     result[key] = None
                     result["errors"][key] = str(error)
+    except Exception as error:
+        st.error(f"Could not load data for {ticker}. Check the symbol and try again.")
+        st.caption(f"Details: {error}")
+        return
 
-        st.session_state[RESULTS_KEY] = {
-            "ticker": ticker,
-            "company_name": company_name,
-            **result,
-        }
-        st.session_state[RESULT_VIEW_KEY] = RESULT_VIEW_OPTIONS[0]
-        record_search(
+    st.session_state[RESULTS_KEY] = {
+        "ticker": ticker,
+        "company_name": company_name,
+        **result,
+    }
+    st.session_state[RESULT_VIEW_KEY] = RESULT_VIEW_OPTIONS[0]
+    user_id = st.session_state["current_user_id"]
+    try:
+        search_id = record_search(
             "single",
             ticker,
             primary_name=company_name,
+            user_id=user_id,
             analysis_type="all",
             result=st.session_state[RESULTS_KEY],
         )
     except Exception as error:
-        st.error(f"Could not load data for {ticker}. Check the symbol and try again.")
+        st.error(f"Search results loaded, but history could not be saved for {ticker}.")
         st.caption(f"Details: {error}")
+    else:
+        st.session_state["company_search_history_id"] = search_id
+        st.session_state["company_search_user_id"] = user_id
 
 
 def render_search_result(result: dict, selector_key: str = RESULT_VIEW_KEY) -> None:

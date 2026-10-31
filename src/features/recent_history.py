@@ -1,14 +1,17 @@
 """Recently viewed history page and read-only result dialog."""
 
 from datetime import datetime, timezone
+from html import escape
 
 import pandas as pd
+import psycopg
 import streamlit as st
 
 from analysis import get_analyst_ratings, get_news, get_price
 from features.company_comparison import get_cached_comparison, show_cached_comparison
 from features.company_search import RESULT_VIEW_OPTIONS, render_search_result
 from features.history import load_history
+from features.notes import show_saved_notes
 
 
 def _show_more_history(total_rows: int) -> None:
@@ -59,6 +62,7 @@ def _show_history_result_dialog(record: dict) -> None:
         st.subheader(f"{primary_name} vs {secondary_name}")
         st.caption(f"{record.get('primary_ticker', '')} vs {record.get('secondary_ticker', '')}")
         show_cached_comparison(record.get("comparison_cache"))
+        show_saved_notes(record["search_id"], record["user_id"])
     else:
         ticker = record.get("primary_ticker") or record.get("ticker_value") or ""
         company_name = record.get("primary_name") or record.get("company_name") or ticker
@@ -79,6 +83,7 @@ def _show_history_result_dialog(record: dict) -> None:
         st.caption(f"Data retrieved: {retrieved_at}")
         if result is not None:
             render_search_result(result, selector_key="history_result_view")
+        show_saved_notes(record["search_id"], record["user_id"])
 
     if st.button("Back", key="history_result_dialog_back"):
         st.session_state["history_popup_record"] = None
@@ -88,7 +93,11 @@ def _show_history_result_dialog(record: dict) -> None:
 def show_recent_history_page() -> None:
     """Render recent searches and open their results in a modal dialog."""
     st.markdown('<h2 class="content-section-title">Recently Viewed</h2>', unsafe_allow_html=True)
-    history = load_history()
+    try:
+        history = load_history(st.session_state["current_user_id"])
+    except (psycopg.Error, ValueError) as error:
+        st.error(f"Could not load recent searches: {error}")
+        return
     if history.empty:
         st.info("No recent searches yet.")
         return
@@ -119,12 +128,15 @@ def show_recent_history_page() -> None:
         ]
         for column, value in zip(columns[:4], values):
             with column:
-                st.markdown(f"<div class='recent-history-cell'>{value}</div>", unsafe_allow_html=True)
+                st.markdown(
+                    f"<div class='recent-history-cell'>{escape(str(value))}</div>",
+                    unsafe_allow_html=True,
+                )
         with columns[4]:
             st.button(
                 "View",
                 key=f"history_view_{row_index}",
-                use_container_width=True,
+                width="stretch",
                 on_click=_load_history_record,
                 args=(row.to_dict(),),
             )

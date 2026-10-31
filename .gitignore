@@ -152,6 +152,8 @@ activemq-data/
 
 # Environments
 .env
+.env.*
+!.env.example
 .envrc
 .venv
 env/
@@ -161,6 +163,9 @@ nimbus/
 ds600p/
 env.bak/
 venv.bak/
+
+# Private keys
+*.pem
 
 # Local temporary app cache
 .cache/

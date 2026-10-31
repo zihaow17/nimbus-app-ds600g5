@@ -1,4 +1,7 @@
-# CloudFormation template for a student-friendly AWS networking lab.
+# Legacy pre-RDS Nimbus deployment template.
+# It does not configure the PostgreSQL database required by the current app.
+# Deploy scripts/nimbus-aws.yaml for the current RDS-backed application.
+# The remaining resources are retained for the original networking exercise only.
 # This environment creates a VPC, public/private subnets in two AZs, routing,
 # a security group, and an EC2 instance that deploys the Nimbus Streamlit app.
 # The app is configured to run on port 8501 and is reachable from the internet.
