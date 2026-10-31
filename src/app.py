@@ -324,8 +324,8 @@ def _switch_demo_user() -> None:
         "nimbus_comparison_history_id",
         "nimbus_comparison_user_id",
         "history_popup_record",
-        "notes_context_key",
-        "notes_dialog_open",
+        "notes_popover_context",
+        "notes_show_all",
     ):
         st.session_state.pop(key, None)
     st.session_state["recent_history_visible_count"] = 5

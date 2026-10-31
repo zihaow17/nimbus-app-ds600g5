@@ -15,7 +15,7 @@ The top navigation contains three pages:
 - **Company Comparison**: Compare two companies' prices and financial metrics.
 - **Recently Viewed**: Review the selected demo user's saved search records, shown five at a time with a Show more control. Select View to open a result dialog with saved notes. New single-company records retain all three fetched datasets; comparison records show matching data cached in the current app session, when available.
 
-Search history and explicitly saved notes are stored in MySQL. Notes remain session drafts until Save is pressed and are linked to a specific search record. The previous local CSV and SQLite data are not migrated.
+Search history and explicitly saved notes are stored in MySQL. Notes remain session drafts until Save is pressed and are linked to a specific search record. The active search notes editor is available from the floating Notes popover, which also provides a user-scoped list of saved notes. Notes opened from Recently Viewed remain read-only in the result dialog. The previous local CSV and SQLite data are not migrated.
 
 ## Architecture
 

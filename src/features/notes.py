@@ -47,6 +47,40 @@ def load_saved_notes(search_id: str, user_id: str) -> list[dict]:
     ]
 
 
+def load_all_saved_notes(user_id: str) -> list[dict]:
+    """Return all saved notes belonging to one demo user."""
+    if user_id not in DEMO_USERS:
+        raise ValueError("A valid demo user is required to access search notes.")
+    ensure_schema()
+    with connect() as connection:
+        with connection.cursor(dictionary=True) as cursor:
+            cursor.execute(
+                """
+                SELECT n.note_id, n.search_id, n.title, n.body,
+                       n.created_at, n.updated_at,
+                       h.search_type, h.primary_ticker, h.secondary_ticker,
+                       h.primary_name, h.secondary_name
+                FROM notes AS n
+                INNER JOIN search_history AS h
+                    ON h.search_id = n.search_id AND h.user_id = n.user_id
+                WHERE n.user_id = %s
+                ORDER BY n.updated_at DESC, n.note_id
+                """,
+                (user_id,),
+            )
+            rows = cursor.fetchall()
+    return [
+        {
+            **row,
+            "note_id": str(row["note_id"]),
+            "search_id": str(row["search_id"]),
+            "created_at": row["created_at"].isoformat(),
+            "updated_at": row["updated_at"].isoformat(),
+        }
+        for row in rows
+    ]
+
+
 def get_history_note_count(record: dict) -> int:
     """Count notes only for the owner and search represented by a history row."""
     search_uuid = _validate_owner(record.get("search_id"), record.get("user_id"))
@@ -203,6 +237,8 @@ def _new_note_draft(context: dict[str, str]) -> None:
     st.session_state[f"nimbus_active_note_{context['search_id']}"] = note_id
     st.session_state[f"nimbus_note_selector_{context['search_id']}"] = note_id
     st.session_state[f"nimbus_note_status_{context['search_id']}"] = ""
+    st.session_state["notes_popover_context"] = context
+    st.session_state["notes_show_all"] = False
 
 
 def _cache_note_draft(context: dict[str, str], note_id: str) -> None:
@@ -214,8 +250,33 @@ def _cache_note_draft(context: dict[str, str], note_id: str) -> None:
     draft["body"] = st.session_state.get(_widget_key("body", context["search_id"], note_id), "")
 
 
-def _show_notes_dialog(context: dict[str, str]) -> None:
-    """Render selectable saved notes and drafts, persisting only explicit actions."""
+def _note_context(note: dict, user_id: str) -> dict[str, str]:
+    """Build the user-scoped editor context represented by an all-notes row."""
+    if note.get("search_type") == "Company comparison":
+        name_one = note.get("primary_name") or note.get("primary_ticker") or "Company"
+        name_two = note.get("secondary_name") or note.get("secondary_ticker") or "Company"
+        label = f"{name_one} vs {name_two}"
+    else:
+        ticker = note.get("primary_ticker") or ""
+        label = f'{note.get("primary_name") or ticker} ({ticker})'
+    return {
+        "search_id": note["search_id"],
+        "user_id": user_id,
+        "label": label,
+    }
+
+
+def _select_all_note(note: dict, user_id: str) -> None:
+    """Select an all-notes row without changing its owning search."""
+    context = _note_context(note, user_id)
+    st.session_state["notes_popover_context"] = context
+    st.session_state[f"nimbus_active_note_{context['search_id']}"] = note["note_id"]
+    st.session_state[f"nimbus_note_selector_{context['search_id']}"] = note["note_id"]
+    st.session_state["notes_show_all"] = False
+
+
+def _show_notes_editor(context: dict[str, str]) -> None:
+    """Render selectable notes and drafts, persisting only explicit actions."""
     st.caption(context["label"])
     try:
         saved_notes = load_saved_notes(context["search_id"], context["user_id"])
@@ -278,14 +339,17 @@ def _show_notes_dialog(context: dict[str, str]) -> None:
         st.text_input(
             "Title",
             key=title_key,
+            placeholder="Title",
+            label_visibility="collapsed",
             on_change=_cache_note_draft,
             args=(context, active_id),
         )
         st.text_area(
             "Note",
             key=body_key,
-            height=220,
-            placeholder="Write your thoughts about this search...",
+            height=180,
+            placeholder="Write your thoughts...",
+            label_visibility="collapsed",
             on_change=_cache_note_draft,
             args=(context, active_id),
         )
@@ -325,33 +389,9 @@ def _show_notes_dialog(context: dict[str, str]) -> None:
                 st.session_state[f"nimbus_note_status_{context['search_id']}"] = ""
                 st.rerun()
 
-    st.button(
-        "＋ New note",
-        key=f"nimbus_note_new_{context['search_id']}",
-        on_click=_new_note_draft,
-        args=(context,),
-    )
-
     status = st.session_state.get(f"nimbus_note_status_{context['search_id']}")
     if status:
         st.success(status)
-
-
-def _close_notes_dialog() -> None:
-    """Reset dialog state after the user dismisses the notes drawer."""
-    st.session_state["notes_dialog_open"] = False
-    st.session_state.pop("notes_context_key", None)
-
-
-@st.dialog(
-    "Notes",
-    width="small",
-    position="right",
-    on_dismiss=_close_notes_dialog,
-)
-def _show_notes_dialog_modal(context: dict[str, str]) -> None:
-    """Display the notes editor in a dismissible side drawer."""
-    _show_notes_dialog(context)
 
 
 def show_saved_notes(search_id: str, user_id: str) -> None:
@@ -374,24 +414,111 @@ def show_saved_notes(search_id: str, user_id: str) -> None:
 
 
 def show_notes_feature() -> None:
-    """Show the Notes button only for a successfully saved current search."""
+    """Show a floating, user-scoped notes popover for the active saved search."""
     context = _context_for_current_search()
     if context is None:
         return
 
-    button_column = st.columns([1, 5, 1])[1]
-    with button_column:
-        if st.button(
-            "📝 Notes",
-            key="open_notes",
-            width="stretch",
-            help="Draft notes for this search and save them when ready.",
-        ):
-            st.session_state["notes_context_key"] = context["search_id"]
-            st.session_state["notes_dialog_open"] = True
+    st.markdown(
+        """
+        <style>
+        .st-key-notes_popover_control {
+            position: fixed;
+            top: 5.25rem;
+            right: 1.5rem;
+            z-index: 999999;
+            width: 3.2rem;
+        }
+        .st-key-notes_popover_control button {
+            width: 3.2rem;
+            height: 3.2rem;
+            min-height: 3.2rem;
+            padding: 0;
+            border-radius: 50%;
+            border: 1px solid #6f9ed0;
+            background: #173457;
+            color: #f5f8ff;
+            font-size: 1.35rem;
+            box-shadow: 0 5px 18px rgba(0, 0, 0, .35);
+        }
+        .st-key-notes_popover_control button:hover {
+            background: #245486;
+            border-color: #9dc8f1;
+        }
+        .st-key-notes_popover {
+            position: fixed;
+            top: 5.25rem;
+            right: 5rem;
+            z-index: 999998;
+        }
+        .st-key-notes_popover > div {
+            width: min(22rem, calc(100vw - 2rem));
+        }
+        .st-key-notes_popover textarea {
+            resize: none;
+            overflow-y: auto;
+        }
+        </style>
+        """,
+        unsafe_allow_html=True,
+    )
 
-    if (
-        st.session_state.get("notes_dialog_open")
-        and st.session_state.get("notes_context_key") == context["search_id"]
+    with st.popover(
+        "📝",
+        key="notes_popover_control",
+        help="Open notes for the active search.",
+        width=320,
     ):
-        _show_notes_dialog_modal(context)
+        user_id = context["user_id"]
+        selected_context = st.session_state.get("notes_popover_context")
+        if not selected_context or selected_context["user_id"] != user_id:
+            selected_context = context
+            st.session_state["notes_popover_context"] = context
+
+        st.caption(selected_context["label"])
+        toolbar = st.container(horizontal=True, horizontal_alignment="left")
+        with toolbar:
+            show_all = st.button(
+                "☰",
+                key="notes_show_all_button",
+                help="Show all saved notes for this user.",
+            )
+            st.button(
+                "+",
+                key="notes_new_note",
+                help="Start a fresh note for the active search.",
+                on_click=_new_note_draft,
+                args=(context,),
+            )
+
+        if show_all:
+            st.session_state["notes_show_all"] = not st.session_state.get(
+                "notes_show_all", False
+            )
+            if not st.session_state["notes_show_all"]:
+                st.session_state["notes_popover_context"] = context
+                selected_context = context
+
+        if st.session_state.get("notes_show_all"):
+            try:
+                all_notes = load_all_saved_notes(user_id)
+            except (mysql.connector.Error, ValueError) as error:
+                st.error(f"Could not load all notes: {error}")
+                return
+            if not all_notes:
+                st.caption("No saved notes yet.")
+            for note in all_notes:
+                label = note["title"] or "Untitled note"
+                note_context = _note_context(note, user_id)
+                st.button(
+                    f"{label} · {note_context['label']}",
+                    key=f"all_note_{note['note_id']}",
+                    width="stretch",
+                    on_click=_select_all_note,
+                    args=(note, user_id),
+                )
+            selected_context = st.session_state.get("notes_popover_context")
+            if not selected_context:
+                return
+
+        _show_notes_editor(selected_context)
