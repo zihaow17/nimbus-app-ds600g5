@@ -2,10 +2,9 @@
 
 from __future__ import annotations
 
-from datetime import datetime
 from uuid import UUID, uuid4
 
-import psycopg
+import mysql.connector
 import streamlit as st
 
 from database import DEMO_USERS, connect, ensure_schema
@@ -26,7 +25,7 @@ def load_saved_notes(search_id: str, user_id: str) -> list[dict]:
     search_uuid = _validate_owner(search_id, user_id)
     ensure_schema()
     with connect() as connection:
-        with connection.cursor() as cursor:
+        with connection.cursor(dictionary=True) as cursor:
             cursor.execute(
                 """
                 SELECT note_id, title, body, created_at, updated_at
@@ -34,7 +33,7 @@ def load_saved_notes(search_id: str, user_id: str) -> list[dict]:
                 WHERE search_id = %s AND user_id = %s
                 ORDER BY updated_at DESC, note_id
                 """,
-                (search_uuid, user_id),
+                (str(search_uuid), user_id),
             )
             rows = cursor.fetchall()
     return [
@@ -46,6 +45,24 @@ def load_saved_notes(search_id: str, user_id: str) -> list[dict]:
         }
         for row in rows
     ]
+
+
+def get_history_note_count(record: dict) -> int:
+    """Count notes only for the owner and search represented by a history row."""
+    search_uuid = _validate_owner(record.get("search_id"), record.get("user_id"))
+    ensure_schema()
+    with connect() as connection:
+        with connection.cursor(dictionary=True) as cursor:
+            cursor.execute(
+                """
+                SELECT COUNT(*) AS note_count
+                FROM notes
+                WHERE search_id = %s AND user_id = %s
+                """,
+                (str(search_uuid), record["user_id"]),
+            )
+            result = cursor.fetchone()
+    return int(result["note_count"])
 
 
 def save_note(
@@ -62,25 +79,33 @@ def save_note(
     normalized_title = (title or "").strip() or "Untitled note"
     ensure_schema()
     with connect() as connection:
-        with connection.cursor() as cursor:
+        with connection.cursor(dictionary=True) as cursor:
             if update_existing:
                 cursor.execute(
                     """
+                    SELECT note_id
+                    FROM notes
+                    WHERE note_id = %s AND search_id = %s AND user_id = %s
+                    FOR UPDATE
+                    """,
+                    (str(note_uuid), str(search_uuid), user_id),
+                )
+                if cursor.fetchone() is None:
+                    raise ValueError("This note does not belong to the selected user and search.")
+                cursor.execute(
+                    """
                     UPDATE notes
-                    SET title = %s, body = %s, updated_at = %s
+                    SET title = %s, body = %s, updated_at = UTC_TIMESTAMP(6)
                     WHERE note_id = %s AND search_id = %s AND user_id = %s
                     """,
                     (
                         normalized_title,
                         body or "",
-                        datetime.now().astimezone(),
-                        note_uuid,
-                        search_uuid,
+                        str(note_uuid),
+                        str(search_uuid),
                         user_id,
                     ),
                 )
-                if cursor.rowcount != 1:
-                    raise ValueError("This note does not belong to the selected user and search.")
             else:
                 cursor.execute(
                     """
@@ -90,15 +115,16 @@ def save_note(
                     WHERE search_id = %s AND user_id = %s
                     """,
                     (
-                        note_uuid,
+                        str(note_uuid),
                         normalized_title,
                         body or "",
-                        search_uuid,
+                        str(search_uuid),
                         user_id,
                     ),
                 )
                 if cursor.rowcount != 1:
                     raise ValueError("This search does not belong to the selected user.")
+            connection.commit()
     return str(note_uuid)
 
 
@@ -108,16 +134,17 @@ def delete_note(note_id: str, search_id: str, user_id: str) -> None:
     note_uuid = UUID(note_id)
     ensure_schema()
     with connect() as connection:
-        with connection.cursor() as cursor:
+        with connection.cursor(dictionary=True) as cursor:
             cursor.execute(
                 """
                 DELETE FROM notes
                 WHERE note_id = %s AND search_id = %s AND user_id = %s
                 """,
-                (note_uuid, search_uuid, user_id),
+                (str(note_uuid), str(search_uuid), user_id),
             )
             if cursor.rowcount != 1:
                 raise ValueError("This note does not belong to the selected user and search.")
+            connection.commit()
 
 
 def _context_for_current_search() -> dict[str, str] | None:
@@ -179,7 +206,7 @@ def _new_note_draft(context: dict[str, str]) -> None:
 
 
 def _cache_note_draft(context: dict[str, str], note_id: str) -> None:
-    """Copy current widget values into session state without writing to PostgreSQL."""
+    """Copy current widget values into session state without writing to MySQL."""
     drafts = st.session_state.setdefault("nimbus_note_drafts", {})
     key = _draft_key(context["search_id"], context["user_id"], note_id)
     draft = drafts.setdefault(key, {"saved": False})
@@ -192,7 +219,7 @@ def _show_notes_dialog(context: dict[str, str]) -> None:
     st.caption(context["label"])
     try:
         saved_notes = load_saved_notes(context["search_id"], context["user_id"])
-    except (psycopg.Error, ValueError) as error:
+    except (mysql.connector.Error, ValueError) as error:
         st.error(f"Could not load notes: {error}")
         return
 
@@ -274,7 +301,7 @@ def _show_notes_dialog(context: dict[str, str]) -> None:
                     note_id=active_id,
                     update_existing=drafts[draft_key].get("saved", False),
                 )
-            except (psycopg.Error, ValueError) as error:
+            except (mysql.connector.Error, ValueError) as error:
                 st.error(f"Could not save note: {error}")
             else:
                 drafts[draft_key]["saved"] = True
@@ -288,7 +315,7 @@ def _show_notes_dialog(context: dict[str, str]) -> None:
         ):
             try:
                 delete_note(active_id, context["search_id"], context["user_id"])
-            except (psycopg.Error, ValueError) as error:
+            except (mysql.connector.Error, ValueError) as error:
                 st.error(f"Could not delete note: {error}")
             else:
                 drafts.pop(draft_key, None)
@@ -331,7 +358,7 @@ def show_saved_notes(search_id: str, user_id: str) -> None:
     """Display saved notes read-only in a Recently Viewed result dialog."""
     try:
         notes = load_saved_notes(search_id, user_id)
-    except (psycopg.Error, ValueError) as error:
+    except (mysql.connector.Error, ValueError) as error:
         st.error(f"Could not load notes for this search: {error}")
         return
 

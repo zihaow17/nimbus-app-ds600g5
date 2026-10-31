@@ -191,10 +191,7 @@ def _company_name_for_ticker(ticker):
 
 def _run_single_search(ticker):
     """
-    Search for a company without fetching every dataset.
-
-    Financial statements, news, and detailed stock data
-    are loaded only when the user opens their result page.
+    Fetch all result datasets and persist the completed search for this user.
     """
 
     ticker = (ticker or "").strip().upper()
@@ -239,9 +236,13 @@ def _run_single_search(ticker):
             primary_name=company_name,
             user_id=user_id,
             analysis_type="all",
-            result=result,
+            result={
+                **result,
+                "ticker": ticker,
+                "company_name": company_name,
+            },
         )
-        st.session_state["current_history_id"] = history_id
+        st.session_state["current_history_id"] = search_id
         st.session_state["notes_history_editor_open"] = False
         st.session_state["notes_pending_context"] = None
         st.session_state["notes_active_id"] = None

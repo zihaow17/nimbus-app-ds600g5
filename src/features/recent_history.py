@@ -4,14 +4,14 @@ from datetime import datetime, timezone
 from html import escape
 
 import pandas as pd
-import psycopg
+import mysql.connector
 import streamlit as st
 
 from analysis import get_analyst_ratings, get_news, get_price
 from features.company_comparison import get_cached_comparison, show_cached_comparison
 from features.company_search import RESULT_VIEW_OPTIONS, render_search_result
 from features.history import load_history
-from features.notes import show_saved_notes
+from features.notes import get_history_note_count, show_saved_notes
 
 
 def _show_more_history(total_rows: int) -> None:
@@ -95,7 +95,7 @@ def show_recent_history_page() -> None:
     st.markdown('<h2 class="content-section-title">Recently Viewed</h2>', unsafe_allow_html=True)
     try:
         history = load_history(st.session_state["current_user_id"])
-    except (psycopg.Error, ValueError) as error:
+    except (mysql.connector.Error, ValueError) as error:
         st.error(f"Could not load recent searches: {error}")
         return
     if history.empty:
@@ -110,7 +110,7 @@ def show_recent_history_page() -> None:
     visible_count = min(st.session_state["recent_history_visible_count"], total_rows)
     visible_history = history.head(visible_count)
 
-    header_cols = st.columns([1.5, 2.8, 1.6, 1.8, 0.9], vertical_alignment="center")
+    header_cols = st.columns([1.5, 2.8, 1.6, 1.8, 0.9, 0.9], vertical_alignment="center")
     headers = ["Type", "Company / Companies", "Ticker(s)", "Timestamp", "View", "Notes"]
     for column, label in zip(header_cols, headers):
         with column:
@@ -146,9 +146,9 @@ def show_recent_history_page() -> None:
             st.button(
                 notes_label,
                 key=f"history_notes_{row_index}",
-                use_container_width=True,
+                width="stretch",
                 disabled=note_count == 0,
-                on_click=show_notes_for_history_record,
+                on_click=_load_history_record,
                 args=(row.to_dict(),),
             )
         st.markdown("<div class='recent-history-row-gap'></div>", unsafe_allow_html=True)
