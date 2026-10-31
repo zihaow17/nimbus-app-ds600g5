@@ -49,7 +49,7 @@ CSS = """
 .nimbus-section {font-size:1.15rem;font-weight:750;margin:.45rem 0 1rem;}
 .nimbus-note {font-size:.76rem;color:#91a1b3;}
 [data-testid="stVerticalBlockBorderWrapper"] > div {border-color:#29394d!important;}
-.stApp {background:#111315;}
+.stApp {background:#0b121d;}
 div[data-testid="stMetric"] {background:#111e30;border:1px solid #25374e;border-radius:12px;padding:12px 14px;}
 div[data-testid="stMetricLabel"] {color:#a7b8cc;}
 div[data-testid="stMetricValue"] {font-size:1.48rem;}
@@ -100,6 +100,22 @@ def company_history(ticker, period):
     if not isinstance(result, pd.DataFrame) or any(c not in result.columns for c in needed):
         return pd.DataFrame(columns=needed)
     return result[needed].dropna(subset=["Close"])
+
+
+def _load_company_pair(ticker1, ticker2):
+    """Load the two Yahoo company profiles concurrently, preserving input order."""
+    with ThreadPoolExecutor(max_workers=2) as executor:
+        first = executor.submit(company_info, ticker1)
+        second = executor.submit(company_info, ticker2)
+        return first.result(), second.result()
+
+
+def _load_history_pair(ticker1, ticker2, period):
+    """Load price histories concurrently; the underlying functions are cached."""
+    with ThreadPoolExecutor(max_workers=2) as executor:
+        first = executor.submit(company_history, ticker1, period)
+        second = executor.submit(company_history, ticker2, period)
+        return {ticker1: first.result(), ticker2: second.result()}
 
 
 def _stock_chart(history, currency="USD"):
@@ -278,7 +294,7 @@ def _render_comparison_dashboard(t1, i1, t2, i2, period, histories=None, history
 def get_cached_comparison(ticker1: str, ticker2: str):
     """Return the active comparison and chart data only when both tickers match."""
     data = st.session_state.get("nimbus_comparison_results")
-    if not data or data[0] != ticker1 or data[2] != ticker2:
+    if not data or data[0] != ticker1.strip().upper() or data[2] != ticker2.strip().upper():
         return None
 
     period_labels = {"1M": "1mo", "3M": "3mo", "6M": "6mo", "1Y": "1y", "5Y": "5y", "ALL": "max"}
@@ -290,7 +306,7 @@ def get_cached_comparison(ticker1: str, ticker2: str):
         "period": period,
         "histories": {
             ticker: history_cache.get((ticker, period))
-            for ticker in (ticker1, ticker2)
+            for ticker in (ticker1.strip().upper(), ticker2.strip().upper())
         },
         "retrieved_at": st.session_state.get("nimbus_comparison_retrieved_at"),
     }
@@ -316,9 +332,18 @@ def show_cached_comparison(cached_comparison) -> None:
         t2,
         i2,
         cached_comparison["period"],
-        histories=cached_comparison["histories"],
+        histories=cached_comparison.get("histories") or {},
         history_cache_only=True,
     )
+
+
+def _remember_history_for_notes(history_id):
+    """Keep Recent History / Notes state compatible with current main."""
+    st.session_state["current_history_id"] = history_id
+    st.session_state["notes_history_editor_open"] = False
+    st.session_state["notes_pending_context"] = None
+    st.session_state["notes_active_id"] = None
+    st.session_state["notes_draft"] = False
 
 
 def show_company_comparison(ticker1: Optional[str] = None, ticker2: Optional[str] = None):
@@ -348,8 +373,7 @@ def show_company_comparison(ticker1: Optional[str] = None, ticker2: Optional[str
             return
         with st.spinner("Fetching data from Yahoo Finance..."):
             try:
-                info1 = company_info(ticker1_value)
-                info2 = company_info(ticker2_value)
+                info1, info2 = _load_company_pair(ticker1_value, ticker2_value)
             except Exception as exc:
                 st.error(f"Could not retrieve company information: {exc}")
                 return
@@ -378,10 +402,14 @@ def show_company_comparison(ticker1: Optional[str] = None, ticker2: Optional[str
     data = st.session_state.get("nimbus_comparison_results")
     if data is None:
         if ticker1 and ticker2:
+            ticker1 = ticker1.strip().upper()
+            ticker2 = ticker2.strip().upper()
+            if ticker1 == ticker2:
+                st.warning("Choose two different tickers.")
+                return
             with st.spinner("Fetching data from Yahoo Finance..."):
                 try:
-                    info1 = company_info(ticker1)
-                    info2 = company_info(ticker2)
+                    info1, info2 = _load_company_pair(ticker1, ticker2)
                 except Exception as exc:
                     st.error(f"Could not retrieve company information: {exc}")
                     return

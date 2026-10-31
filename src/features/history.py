@@ -166,6 +166,7 @@ def load_history(user_id: str) -> pd.DataFrame:
     return pd.DataFrame(normalized, columns=[
         "search_id",
         "user_id",
+        "history_id",
         "timestamp",
         "search_type",
         "company_name",

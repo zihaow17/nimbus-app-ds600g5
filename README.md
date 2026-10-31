@@ -68,6 +68,8 @@ data remain in the active Streamlit session rather than being persisted.
 Unsaved notes exist only in the browser session state. Pressing Save writes a
 note linked to both the selected user and search record.
 
+The floating Notes button is available while viewing an active company search or comparison. Notes are stored locally in `.cache/nimbus/notes.db`, can be reviewed globally, and are associated with the specific search record when possible. New notes remain drafts until the user submits **Save (Ctrl+Enter)**; blank drafts are not persisted. Because the demo has no authentication, local history and notes are shared by users of the same app instance.
+
 ## Project Structure
 
 - `src/app.py`: Streamlit entry point, shared page styling, and navigation.
