@@ -1,6 +1,6 @@
 """Recently viewed history page and read-only result dialog."""
 
-from datetime import datetime, timezone
+from datetime import date, datetime, timezone
 from html import escape
 
 import pandas as pd
@@ -28,11 +28,13 @@ def _format_timestamp(timestamp: str) -> str:
 
 
 def _load_history_record(record: dict) -> None:
-    """Select a history item and attach matching in-session comparison data."""
+    """Select a history item and prepare its saved or legacy comparison data."""
     st.session_state["history_result_view"] = RESULT_VIEW_OPTIONS[0]
     selected = dict(record)
     if selected.get("search_type") == "Company comparison":
-        selected["comparison_cache"] = get_cached_comparison(
+        result = selected.get("result")
+        snapshot = result.get("comparison_snapshot") if isinstance(result, dict) else None
+        selected["comparison_cache"] = snapshot or get_cached_comparison(
             selected.get("primary_ticker", ""),
             selected.get("secondary_ticker", ""),
         )
@@ -93,13 +95,65 @@ def _show_history_result_dialog(record: dict) -> None:
 def show_recent_history_page() -> None:
     """Render recent searches and open their results in a modal dialog."""
     st.markdown('<h2 class="content-section-title">Recently Viewed</h2>', unsafe_allow_html=True)
+    today = date.today()
+    with st.form("recent_history_filters"):
+        ticker_column, start_column, end_column, type_column = st.columns(
+            [1.2, 1, 1, 1.1],
+            vertical_alignment="bottom",
+        )
+        with ticker_column:
+            ticker_filter = st.text_input(
+                "Exact ticker",
+                key="recent_history_ticker_filter",
+                help="For comparisons, either company ticker matches.",
+            ).strip().upper()
+        with start_column:
+            start_date = st.date_input(
+                "From",
+                value=date(2000, 1, 1),
+                min_value=date(1970, 1, 1),
+                max_value=today,
+                key="recent_history_start_date",
+            )
+        with end_column:
+            end_date = st.date_input(
+                "To",
+                value=today,
+                min_value=date(1970, 1, 1),
+                max_value=today,
+                key="recent_history_end_date",
+            )
+        with type_column:
+            type_labels = {
+                "All analysis types": None,
+                "Company searches": "all",
+                "Comparisons": "comparison",
+            }
+            selected_type = st.selectbox(
+                "Analysis type",
+                list(type_labels),
+                key="recent_history_type_filter",
+            )
+        st.form_submit_button("Apply filters")
+
+    filter_state = (ticker_filter, start_date, end_date, selected_type)
+    if st.session_state.get("recent_history_filter_state") != filter_state:
+        st.session_state["recent_history_filter_state"] = filter_state
+        st.session_state["recent_history_visible_count"] = 5
+
     try:
-        history = load_history(st.session_state["current_user_id"])
+        history = load_history(
+            st.session_state["current_user_id"],
+            ticker=ticker_filter,
+            start_date=start_date,
+            end_date=end_date,
+            analysis_type=type_labels[selected_type],
+        )
     except (mysql.connector.Error, ValueError) as error:
         st.error(f"Could not load recent searches: {error}")
         return
     if history.empty:
-        st.info("No recent searches yet.")
+        st.info("No saved history matches these filters.")
         return
 
     history = history.sort_values("timestamp", ascending=False, kind="mergesort").reset_index(drop=True)

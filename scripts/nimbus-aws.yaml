@@ -1,11 +1,12 @@
 # CloudFormation template for a student-friendly AWS networking lab.
-# This environment creates public app and private database subnets in two AZs,
-# then deploys Nimbus on EC2 with a private MySQL RDS database.
+# The template creates an internet-facing ALB and an Auto Scaling app tier across
+# two AZs, with a private MySQL RDS database and one NAT Gateway for app egress.
 
 AWSTemplateFormatVersion: '2010-09-09'
 Description: >-
-  Create a VPC, public and private subnets, an internet gateway, a private MySQL
-  database, and an EC2 instance that deploys the Nimbus Streamlit app.
+  Create a VPC, public and private subnets, an internet gateway, a NAT Gateway,
+  an internet-facing load balancer, an Auto Scaling Nimbus app tier, and private
+  MySQL RDS.
 
 Parameters:
   GitHubRepoUrl:
@@ -16,17 +17,12 @@ Parameters:
 
   AllowedClientCidr:
     Type: String
-    Description: CIDR allowed to reach SSH and Streamlit, e.g. your public IPv4 address with /32.
+    Description: CIDR allowed to reach the Nimbus load balancer, e.g. your public IPv4 address with /32.
 
   LatestAmiId:
     Type: AWS::SSM::Parameter::Value<AWS::EC2::Image::Id>
     Default: /aws/service/ami-amazon-linux-latest/al2023-ami-kernel-default-x86_64
     Description: Latest Amazon Linux 2023 x86_64 AMI from the public SSM parameter.
-
-  KeyPairName:
-    Type: AWS::EC2::KeyPair::KeyName
-    Description: Existing EC2 Key Pair to use for SSH access.
-    Default: vockey
 
   DatabaseMasterUsername:
     Type: String
@@ -142,13 +138,41 @@ Resources:
       SubnetId: !Ref PublicSubnet2
       RouteTableId: !Ref PublicRouteTable
 
+  NimbusNatEip:
+    Type: AWS::EC2::EIP
+    DependsOn: NimbusInternetGatewayAttachment
+    Properties:
+      Domain: vpc
+      Tags:
+        - Key: Name
+          Value: Nimbus NAT Gateway EIP
+
+  NimbusNatGateway:
+    Type: AWS::EC2::NatGateway
+    DependsOn:
+      - PublicRoute
+      - PublicSubnet1RouteTableAssociation
+    Properties:
+      AllocationId: !GetAtt NimbusNatEip.AllocationId
+      SubnetId: !Ref PublicSubnet1
+      Tags:
+        - Key: Name
+          Value: Nimbus NAT Gateway
+
   PrivateRouteTable:
     Type: AWS::EC2::RouteTable
     Properties:
       VpcId: !Ref NimbusVpc
       Tags:
         - Key: Name
-          Value: lab-rtb-private1-us-east-1a
+          Value: Nimbus Private Route Table
+
+  PrivateRoute:
+    Type: AWS::EC2::Route
+    Properties:
+      RouteTableId: !Ref PrivateRouteTable
+      DestinationCidrBlock: 0.0.0.0/0
+      NatGatewayId: !Ref NimbusNatGateway
 
   PrivateSubnet1RouteTableAssociation:
     Type: AWS::EC2::SubnetRouteTableAssociation
@@ -163,28 +187,42 @@ Resources:
       RouteTableId: !Ref PrivateRouteTable
 
   # ---------------------------------------------------------------------------
-  # Security groups
+  # Load balancer and application security groups
   # ---------------------------------------------------------------------------
+  NimbusLoadBalancerSecurityGroup:
+    Type: AWS::EC2::SecurityGroup
+    Properties:
+      GroupDescription: Allow Nimbus web traffic from the approved client CIDR
+      VpcId: !Ref NimbusVpc
+      SecurityGroupIngress:
+        - IpProtocol: tcp
+          FromPort: 80
+          ToPort: 80
+          CidrIp: !Ref AllowedClientCidr
+          Description: HTTP access to Nimbus through the load balancer
+      Tags:
+        - Key: Name
+          Value: Nimbus Load Balancer Security Group
+
   NimbusWebSecurityGroup:
     Type: AWS::EC2::SecurityGroup
     Properties:
       GroupName: Nimbus Web Security Group
       GroupDescription: Enable HTTP and Streamlit access
       VpcId: !Ref NimbusVpc
-      SecurityGroupIngress:
-        - IpProtocol: tcp
-          FromPort: 22
-          ToPort: 22
-          CidrIp: !Ref AllowedClientCidr
-          Description: SSH access
-        - IpProtocol: tcp
-          FromPort: 8501
-          ToPort: 8501
-          CidrIp: !Ref AllowedClientCidr
-          Description: Streamlit app access on port 8501
       Tags:
         - Key: Name
           Value: Nimbus Web Security Group
+
+  NimbusWebFromLoadBalancerIngress:
+    Type: AWS::EC2::SecurityGroupIngress
+    Properties:
+      GroupId: !GetAtt NimbusWebSecurityGroup.GroupId
+      IpProtocol: tcp
+      FromPort: 8501
+      ToPort: 8501
+      SourceSecurityGroupId: !GetAtt NimbusLoadBalancerSecurityGroup.GroupId
+      Description: Streamlit traffic from the Nimbus load balancer
 
   NimbusDatabaseSecurityGroup:
     Type: AWS::EC2::SecurityGroup
@@ -212,6 +250,65 @@ Resources:
         - Key: Name
           Value: Nimbus Database Subnets
 
+  NimbusTargetGroup:
+    Type: AWS::ElasticLoadBalancingV2::TargetGroup
+    Properties:
+      VpcId: !Ref NimbusVpc
+      TargetType: instance
+      Protocol: HTTP
+      Port: 8501
+      HealthCheckEnabled: true
+      HealthCheckProtocol: HTTP
+      HealthCheckPath: /
+      Matcher:
+        HttpCode: '200-399'
+      HealthCheckIntervalSeconds: 30
+      HealthCheckTimeoutSeconds: 10
+      HealthyThresholdCount: 2
+      UnhealthyThresholdCount: 3
+      TargetGroupAttributes:
+        - Key: stickiness.enabled
+          Value: 'true'
+        - Key: stickiness.type
+          Value: lb_cookie
+        - Key: stickiness.lb_cookie.duration_seconds
+          Value: '86400'
+      Tags:
+        - Key: Name
+          Value: Nimbus App Targets
+
+  NimbusLoadBalancer:
+    Type: AWS::ElasticLoadBalancingV2::LoadBalancer
+    DependsOn:
+      - PublicRoute
+      - PublicSubnet1RouteTableAssociation
+      - PublicSubnet2RouteTableAssociation
+    Properties:
+      Scheme: internet-facing
+      Type: application
+      IpAddressType: ipv4
+      Subnets:
+        - !Ref PublicSubnet1
+        - !Ref PublicSubnet2
+      SecurityGroups:
+        - !GetAtt NimbusLoadBalancerSecurityGroup.GroupId
+      LoadBalancerAttributes:
+        - Key: idle_timeout.timeout_seconds
+          Value: '300'
+      Tags:
+        - Key: Name
+          Value: Nimbus Application Load Balancer
+
+  NimbusHttpListener:
+    Type: AWS::ElasticLoadBalancingV2::Listener
+    Properties:
+      LoadBalancerArn: !Ref NimbusLoadBalancer
+      Port: 80
+      Protocol: HTTP
+      DefaultActions:
+        - Type: forward
+          TargetGroupArn: !Ref NimbusTargetGroup
+
   NimbusDatabase:
     Type: AWS::RDS::DBInstance
     DeletionPolicy: Delete
@@ -238,95 +335,127 @@ Resources:
           Value: Nimbus MySQL Database
 
   # ---------------------------------------------------------------------------
-  # EC2 instance for the app
+  # Auto Scaling app tier
   # ---------------------------------------------------------------------------
-  NimbusWebServer:
-    Type: AWS::EC2::Instance
+  NimbusLaunchTemplate:
+    Type: AWS::EC2::LaunchTemplate
     Properties:
-      ImageId: !Ref LatestAmiId
-      InstanceType: t2.micro
-      KeyName: !Ref KeyPairName
-      SubnetId: !Ref PublicSubnet2
-      SecurityGroupIds:
-        - !Ref NimbusWebSecurityGroup
-      UserData:
-        Fn::Base64: !Sub |
-          #!/bin/bash
-          set -eu
+      LaunchTemplateData:
+        ImageId: !Ref LatestAmiId
+        InstanceType: t2.micro
+        SecurityGroupIds:
+          - !Ref NimbusWebSecurityGroup
+        MetadataOptions:
+          HttpEndpoint: enabled
+          HttpTokens: required
+        UserData:
+          Fn::Base64: !Sub |
+            #!/bin/bash
+            set -eu
 
-          # Amazon Linux 2023 compatibility: yum is usually available as a compatibility
-          # alias, but dnf is the native package manager. This makes the bootstrap robust.
-          yum install -y git python3.11 || dnf install -y git python3.11
+            yum install -y git python3.11 || dnf install -y git python3.11
+            python3.11 -m ensurepip --upgrade
 
-          # Use an explicit Python version so the app does not depend on the AMI's
-          # default python3 interpreter.
-          python3.11 -m ensurepip --upgrade
+            mkdir -p /home/ec2-user/app
+            chown -R ec2-user:ec2-user /home/ec2-user
 
-          # Prepare the app directory and clone the project repository.
-          mkdir -p /home/ec2-user/app
-          chown -R ec2-user:ec2-user /home/ec2-user
+            sudo -u ec2-user bash -lc 'cd /home/ec2-user && if [ ! -d /home/ec2-user/nimbus-app ]; then git clone "${GitHubRepoUrl}" /home/ec2-user/nimbus-app; fi'
 
-          sudo -u ec2-user bash -lc 'cd /home/ec2-user && if [ ! -d /home/ec2-user/nimbus-app ]; then git clone "${GitHubRepoUrl}" /home/ec2-user/nimbus-app; fi'
+            sudo -u ec2-user bash -lc '
+              set -eux
+              cd /home/ec2-user/nimbus-app
+              python3.11 -m venv .venv
+              . .venv/bin/activate
+              python -m pip install --upgrade pip
+              python -m pip install -r requirements.txt
+            '
 
-          sudo -u ec2-user bash -lc '
-            set -eux
-            cd /home/ec2-user/nimbus-app
-            python3.11 -m venv .venv
-            . .venv/bin/activate
-            python -m pip install --upgrade pip
-            python -m pip install -r requirements.txt
-          '
+            install -d -m 0700 /etc/nimbus
+            cat >/etc/nimbus/nimbus.env <<'EOF'
+            NIMBUS_DB_HOST=${NimbusDatabase.Endpoint.Address}
+            NIMBUS_DB_PORT=${NimbusDatabase.Endpoint.Port}
+            NIMBUS_DB_NAME=nimbus
+            NIMBUS_DB_USER=${DatabaseMasterUsername}
+            NIMBUS_DB_PASSWORD=${DatabaseMasterPassword}
+            NIMBUS_DB_SSL_CA=/etc/pki/tls/certs/rds-global-bundle.pem
+            EOF
+            chmod 0600 /etc/nimbus/nimbus.env
 
-          install -d -m 0700 /etc/nimbus
-          cat >/etc/nimbus/nimbus.env <<'EOF'
-          NIMBUS_DB_HOST=${NimbusDatabase.Endpoint.Address}
-          NIMBUS_DB_PORT=${NimbusDatabase.Endpoint.Port}
-          NIMBUS_DB_NAME=nimbus
-          NIMBUS_DB_USER=${DatabaseMasterUsername}
-          NIMBUS_DB_PASSWORD=${DatabaseMasterPassword}
-          NIMBUS_DB_SSL_CA=/etc/pki/tls/certs/rds-global-bundle.pem
-          EOF
-          chmod 0600 /etc/nimbus/nimbus.env
+            cat >/etc/systemd/system/nimbus.service <<'EOF'
+            [Unit]
+            Description=Nimbus Streamlit application
+            After=network-online.target
+            Wants=network-online.target
 
-          cat >/etc/systemd/system/nimbus.service <<'EOF'
-          [Unit]
-          Description=Nimbus Streamlit application
-          After=network-online.target
-          Wants=network-online.target
+            [Service]
+            Type=simple
+            User=ec2-user
+            WorkingDirectory=/home/ec2-user/nimbus-app
+            EnvironmentFile=/etc/nimbus/nimbus.env
+            ExecStart=/home/ec2-user/nimbus-app/.venv/bin/python -m streamlit run src/app.py --server.address 0.0.0.0 --server.port 8501
+            Restart=on-failure
+            RestartSec=10
 
-          [Service]
-          Type=simple
-          User=ec2-user
-          WorkingDirectory=/home/ec2-user/nimbus-app
-          EnvironmentFile=/etc/nimbus/nimbus.env
-          ExecStart=/home/ec2-user/nimbus-app/.venv/bin/python -m streamlit run src/app.py --server.address 0.0.0.0 --server.port 8501
-          Restart=on-failure
-          RestartSec=10
+            [Install]
+            WantedBy=multi-user.target
+            EOF
 
-          [Install]
-          WantedBy=multi-user.target
-          EOF
+            curl -fsSLo /etc/pki/tls/certs/rds-global-bundle.pem https://truststore.pki.rds.amazonaws.com/global/global-bundle.pem
+            chmod 0644 /etc/pki/tls/certs/rds-global-bundle.pem
+            systemctl daemon-reload
+            systemctl enable --now nimbus.service
 
-          curl -fsSLo /etc/pki/tls/certs/rds-global-bundle.pem https://truststore.pki.rds.amazonaws.com/global/global-bundle.pem
-          chmod 0644 /etc/pki/tls/certs/rds-global-bundle.pem
-          systemctl daemon-reload
-          systemctl enable --now nimbus.service
+  NimbusAutoScalingGroup:
+    Type: AWS::AutoScaling::AutoScalingGroup
+    DependsOn:
+      - NimbusHttpListener
+      - PrivateRoute
+      - PrivateSubnet1RouteTableAssociation
+      - PrivateSubnet2RouteTableAssociation
+    Properties:
+      VPCZoneIdentifier:
+        - !Ref PrivateSubnet1
+        - !Ref PrivateSubnet2
+      LaunchTemplate:
+        LaunchTemplateId: !Ref NimbusLaunchTemplate
+        Version: !GetAtt NimbusLaunchTemplate.LatestVersionNumber
+      MinSize: '2'
+      DesiredCapacity: '2'
+      MaxSize: '6'
+      HealthCheckType: ELB
+      HealthCheckGracePeriod: 900
+      TargetGroupARNs:
+        - !Ref NimbusTargetGroup
+      MetricsCollection:
+        - Granularity: 1Minute
       Tags:
         - Key: Name
-          Value: Web Server 1
+          Value: Nimbus App Instance
+          PropagateAtLaunch: true
+
+  NimbusCpuScalingPolicy:
+    Type: AWS::AutoScaling::ScalingPolicy
+    Properties:
+      AutoScalingGroupName: !Ref NimbusAutoScalingGroup
+      PolicyType: TargetTrackingScaling
+      EstimatedInstanceWarmup: 300
+      TargetTrackingConfiguration:
+        PredefinedMetricSpecification:
+          PredefinedMetricType: ASGAverageCPUUtilization
+        TargetValue: 60.0
 
 Outputs:
   VpcId:
     Description: Created VPC ID
     Value: !Ref NimbusVpc
 
-  WebServerPublicDns:
-    Description: EC2 public DNS name for the Nimbus web app
-    Value: !GetAtt NimbusWebServer.PublicDnsName
+  LoadBalancerDns:
+    Description: Public DNS name for the Nimbus Application Load Balancer
+    Value: !GetAtt NimbusLoadBalancer.DNSName
 
   StreamlitUrl:
-    Description: URL for the deployed Streamlit app
-    Value: !Sub http://${NimbusWebServer.PublicDnsName}:8501
+    Description: HTTP URL for the Nimbus app through the load balancer
+    Value: !Sub http://${NimbusLoadBalancer.DNSName}
 
   DatabaseEndpoint:
     Description: Private MySQL endpoint for the Nimbus app
