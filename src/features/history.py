@@ -2,12 +2,13 @@
 
 from __future__ import annotations
 
-from datetime import datetime, timezone
+from datetime import date, datetime, timedelta, timezone
 import json
 from io import StringIO
 from typing import Optional
 from uuid import uuid4
 
+import numpy as np
 import pandas as pd
 
 from database import DEMO_USERS, connect, ensure_schema
@@ -15,12 +16,22 @@ from database import DEMO_USERS, connect, ensure_schema
 
 def _encode_result_value(value):
     """Represent DataFrames as JSON-safe markers before storing results in JSON."""
+    if value is pd.NA or value is pd.NaT:
+        return None
     if isinstance(value, pd.DataFrame):
         return {"__dataframe__": value.to_json(orient="split", date_format="iso")}
     if isinstance(value, dict):
         return {key: _encode_result_value(item) for key, item in value.items()}
     if isinstance(value, list):
         return [_encode_result_value(item) for item in value]
+    if isinstance(value, tuple):
+        return [_encode_result_value(item) for item in value]
+    if isinstance(value, (pd.Timestamp, datetime, date)):
+        return value.isoformat()
+    if isinstance(value, np.generic):
+        return _encode_result_value(value.item())
+    if isinstance(value, float) and not np.isfinite(value):
+        return None
     return value
 
 
@@ -107,7 +118,7 @@ def record_search(
 
     search_id = uuid4()
     encoded_result = (
-        json.dumps(_encode_result_value(result))
+        json.dumps(_encode_result_value(result), allow_nan=False)
         if result is not None
         else None
     )
@@ -139,25 +150,76 @@ def record_search(
     return str(search_id)
 
 
-def load_history(user_id: str) -> pd.DataFrame:
-    """Load history belonging only to the selected demo user."""
+def _build_history_query(
+    user_id: str,
+    ticker: Optional[str] = None,
+    start_date: Optional[date] = None,
+    end_date: Optional[date] = None,
+    analysis_type: Optional[str] = None,
+) -> tuple[str, tuple]:
+    """Build a parameterized, user-scoped history query with optional filters."""
+    conditions = ["user_id = %s"]
+    params: list = [user_id]
+
+    normalized_ticker = (ticker or "").strip().upper()
+    if normalized_ticker:
+        conditions.append("(primary_ticker = %s OR secondary_ticker = %s)")
+        params.extend((normalized_ticker, normalized_ticker))
+
+    if start_date is not None and end_date is not None and start_date > end_date:
+        raise ValueError("History start date must be on or before the end date.")
+    if start_date is not None:
+        conditions.append("timestamp_utc >= %s")
+        params.append(start_date.isoformat())
+    if end_date is not None:
+        conditions.append("timestamp_utc < %s")
+        params.append((end_date + timedelta(days=1)).isoformat())
+
+    if analysis_type not in (None, "", "all", "comparison"):
+        raise ValueError("Analysis type must be 'all', 'comparison', or empty.")
+    if analysis_type:
+        legacy_search_type = (
+            "single" if analysis_type == "all" else "comparison"
+        )
+        conditions.append(
+            "(analysis_type = %s OR "
+            "(analysis_type = '' AND search_type = %s))"
+        )
+        params.extend((analysis_type, legacy_search_type))
+
+    query = """
+        SELECT search_id, user_id, timestamp_utc, search_type,
+               primary_ticker, secondary_ticker, primary_name,
+               secondary_name, analysis_type, result_json
+        FROM search_history
+        WHERE """ + " AND ".join(conditions) + """
+        ORDER BY timestamp_utc DESC, search_id DESC
+    """
+    return query, tuple(params)
+
+
+def load_history(
+    user_id: str,
+    ticker: Optional[str] = None,
+    start_date: Optional[date] = None,
+    end_date: Optional[date] = None,
+    analysis_type: Optional[str] = None,
+) -> pd.DataFrame:
+    """Load a demo user's history, optionally filtered by ticker, date, and analysis type."""
     if user_id not in DEMO_USERS:
         raise ValueError("A valid demo user is required to load search history.")
 
+    query, params = _build_history_query(
+        user_id,
+        ticker=ticker,
+        start_date=start_date,
+        end_date=end_date,
+        analysis_type=analysis_type,
+    )
     ensure_schema()
     with connect() as connection:
         with connection.cursor(dictionary=True) as cursor:
-            cursor.execute(
-                """
-                SELECT search_id, user_id, timestamp_utc, search_type,
-                       primary_ticker, secondary_ticker, primary_name,
-                       secondary_name, analysis_type, result_json
-                FROM search_history
-                WHERE user_id = %s
-                ORDER BY timestamp_utc DESC, search_id DESC
-                """,
-                (user_id,),
-            )
+            cursor.execute(query, params)
             rows = cursor.fetchall()
 
     normalized = [
