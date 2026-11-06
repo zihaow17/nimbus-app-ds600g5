@@ -358,7 +358,7 @@ Resources:
       VPCSecurityGroups:
         - !GetAtt NimbusDatabaseSecurityGroup.GroupId
       PubliclyAccessible: false
-      MultiAZ: true
+      MultiAZ: false
       BackupRetentionPeriod: 0
       DeletionProtection: false
       AutoMinorVersionUpgrade: true
