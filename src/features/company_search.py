@@ -607,7 +607,7 @@ def show_company_search_page():
         with middle:
             st.image(
                 str(WIDE_LOGO_PATH),
-                use_container_width=True,
+                width=520,
             )
 
     else:
