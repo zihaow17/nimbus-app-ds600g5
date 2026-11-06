@@ -562,6 +562,9 @@ def show_company_search_page():
 
         .st-key-company-search-bar input {
             text-transform: uppercase;
+        .st-key-nimbus-home-logo [data-testid="stImage"] {
+            display: flex;
+            justify-content: center;
         }
 
         .nimbus-hero-title {
@@ -592,10 +595,11 @@ def show_company_search_page():
         left, middle, right = st.columns([1, 4, 1])
 
         with middle:
-            st.image(
-                str(WIDE_LOGO_PATH),
-                use_container_width=True,
-            )
+            with st.container(key="nimbus-home-logo"):
+                st.image(
+                    WIDE_LOGO_PATH.read_bytes(),
+                    width=520,
+                )
 
     else:
         st.markdown(
