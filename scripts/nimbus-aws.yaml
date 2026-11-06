@@ -1,10 +1,10 @@
 # CloudFormation template for a student-friendly AWS networking lab.
-# The template creates an internet-facing ALB and an Auto Scaling app tier across
-# two AZs, with a private MySQL RDS database and one NAT Gateway for app egress.
+# The template creates a multi-AZ ALB and Auto Scaling app tier, redundant NAT
+# Gateways, and a Multi-AZ private MySQL RDS database.
 
 AWSTemplateFormatVersion: '2010-09-09'
 Description: >-
-  Create a VPC, public and private subnets, an internet gateway, a NAT Gateway,
+  Create a VPC, public and private subnets, an internet gateway, NAT Gateways,
   an internet-facing load balancer, an Auto Scaling Nimbus app tier, and private
   MySQL RDS.
 
@@ -14,10 +14,6 @@ Parameters:
     Description: Git repository URL for the Nimbus app to clone onto the EC2 instance.
     Default: https://github.com/zihaow17/nimbus-app-ds600g5.git
     AllowedPattern: ^https://github\.com/[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+(\.git)?$
-
-  AllowedClientCidr:
-    Type: String
-    Description: CIDR allowed to reach the Nimbus load balancer, e.g. your public IPv4 address with /32.
 
   LatestAmiId:
     Type: AWS::SSM::Parameter::Value<AWS::EC2::Image::Id>
@@ -157,34 +153,70 @@ Resources:
       SubnetId: !Ref PublicSubnet1
       Tags:
         - Key: Name
-          Value: Nimbus NAT Gateway
+          Value: Nimbus NAT Gateway AZ 1
 
-  PrivateRouteTable:
+  NimbusNatEip2:
+    Type: AWS::EC2::EIP
+    DependsOn: NimbusInternetGatewayAttachment
+    Properties:
+      Domain: vpc
+      Tags:
+        - Key: Name
+          Value: Nimbus NAT Gateway EIP AZ 2
+
+  NimbusNatGateway2:
+    Type: AWS::EC2::NatGateway
+    DependsOn:
+      - PublicRoute
+      - PublicSubnet2RouteTableAssociation
+    Properties:
+      AllocationId: !GetAtt NimbusNatEip2.AllocationId
+      SubnetId: !Ref PublicSubnet2
+      Tags:
+        - Key: Name
+          Value: Nimbus NAT Gateway AZ 2
+
+  PrivateRouteTable1:
     Type: AWS::EC2::RouteTable
     Properties:
       VpcId: !Ref NimbusVpc
       Tags:
         - Key: Name
-          Value: Nimbus Private Route Table
+          Value: Nimbus Private Route Table AZ 1
 
-  PrivateRoute:
+  PrivateRoute1:
     Type: AWS::EC2::Route
     Properties:
-      RouteTableId: !Ref PrivateRouteTable
+      RouteTableId: !Ref PrivateRouteTable1
       DestinationCidrBlock: 0.0.0.0/0
       NatGatewayId: !Ref NimbusNatGateway
+
+  PrivateRouteTable2:
+    Type: AWS::EC2::RouteTable
+    Properties:
+      VpcId: !Ref NimbusVpc
+      Tags:
+        - Key: Name
+          Value: Nimbus Private Route Table AZ 2
+
+  PrivateRoute2:
+    Type: AWS::EC2::Route
+    Properties:
+      RouteTableId: !Ref PrivateRouteTable2
+      DestinationCidrBlock: 0.0.0.0/0
+      NatGatewayId: !Ref NimbusNatGateway2
 
   PrivateSubnet1RouteTableAssociation:
     Type: AWS::EC2::SubnetRouteTableAssociation
     Properties:
       SubnetId: !Ref PrivateSubnet1
-      RouteTableId: !Ref PrivateRouteTable
+      RouteTableId: !Ref PrivateRouteTable1
 
   PrivateSubnet2RouteTableAssociation:
     Type: AWS::EC2::SubnetRouteTableAssociation
     Properties:
       SubnetId: !Ref PrivateSubnet2
-      RouteTableId: !Ref PrivateRouteTable
+      RouteTableId: !Ref PrivateRouteTable2
 
   # ---------------------------------------------------------------------------
   # Load balancer and application security groups
@@ -192,14 +224,14 @@ Resources:
   NimbusLoadBalancerSecurityGroup:
     Type: AWS::EC2::SecurityGroup
     Properties:
-      GroupDescription: Allow Nimbus web traffic from the approved client CIDR
+      GroupDescription: Allow public IPv4 HTTP access to Nimbus
       VpcId: !Ref NimbusVpc
       SecurityGroupIngress:
         - IpProtocol: tcp
           FromPort: 80
           ToPort: 80
-          CidrIp: !Ref AllowedClientCidr
-          Description: HTTP access to Nimbus through the load balancer
+          CidrIp: 0.0.0.0/0
+          Description: Public IPv4 HTTP access to Nimbus through the load balancer
       Tags:
         - Key: Name
           Value: Nimbus Load Balancer Security Group
@@ -326,7 +358,7 @@ Resources:
       VPCSecurityGroups:
         - !GetAtt NimbusDatabaseSecurityGroup.GroupId
       PubliclyAccessible: false
-      MultiAZ: false
+      MultiAZ: true
       BackupRetentionPeriod: 0
       DeletionProtection: false
       AutoMinorVersionUpgrade: true
@@ -409,7 +441,8 @@ Resources:
     Type: AWS::AutoScaling::AutoScalingGroup
     DependsOn:
       - NimbusHttpListener
-      - PrivateRoute
+      - PrivateRoute1
+      - PrivateRoute2
       - PrivateSubnet1RouteTableAssociation
       - PrivateSubnet2RouteTableAssociation
     Properties:
