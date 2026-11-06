@@ -193,23 +193,6 @@ def _company_identity_html(
 # SEARCH INPUT
 # ============================================================
 
-def _uppercase_search_ticker():
-    """Convert ticker symbols to uppercase."""
-
-    value = st.session_state.get(
-        "company_search_ticker",
-        "",
-    )
-
-    st.session_state["company_search_ticker"] = (
-        value.upper()
-    )
-
-def _uppercase_search_ticker() -> None:
-    """Normalize the ticker field as the user types."""
-    ticker = st.session_state.get("company_search_ticker", "")
-    st.session_state["company_search_ticker"] = ticker.upper()
-
 def _company_name_for_ticker(ticker):
     """Preserve the existing helper interface."""
 
@@ -578,6 +561,9 @@ def show_company_search_page():
             max-width: 620px;
         }
 
+        .st-key-company-search-bar input {
+            text-transform: uppercase;
+        .st-key-nimbus-home-logo [data-testid="stImage"] {
         .nimbus-home-logo {
             display: flex;
             justify-content: center;
@@ -651,39 +637,25 @@ def show_company_search_page():
     # --------------------------------------------------------
 
     with st.container(key="company-search-bar"):
-        ticker = st.text_input(
-            "Company or ticker",
-            placeholder="Search company or ticker",
-            label_visibility="collapsed",
-            help=(
-                "Enter a ticker symbol such as "
-                "AAPL, MSFT, or NVDA."
-            ),
-            key="company_search_ticker",
-            on_change=_uppercase_search_ticker,
-        )
-
-        st.caption(
-            "e.g. Apple, AAPL, Microsoft, MSFT"
-        )
+        with st.form("analysis_form"):
+            ticker = st.text_input(
+                "Company or ticker",
+                placeholder="Search company or ticker",
+                label_visibility="collapsed",
+                help=(
+                    "Enter a ticker symbol such as "
+                    "AAPL, MSFT, or NVDA."
+                ),
+                key="company_search_ticker",
+            )
+            st.caption("e.g. Apple, AAPL, Microsoft, MSFT")
+            run_analysis = st.form_submit_button("Search")
 
     # --------------------------------------------------------
     # FAVOURITES
     # --------------------------------------------------------
 
     selected_favourite = show_favourite_companies()
-
-    # --------------------------------------------------------
-    # SEARCH BUTTON
-    # --------------------------------------------------------
-
-    with st.form("analysis_form"):
-        left, center, right = st.columns([1, 1, 1])
-
-        with center:
-            run_analysis = st.form_submit_button(
-                "Search"
-            )
 
     # Avoid fetching data twice if both actions occur.
     selected_ticker = None

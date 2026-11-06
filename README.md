@@ -21,61 +21,71 @@ Search history and explicitly saved notes are stored in MySQL. Notes remain sess
 
 ```mermaid
 flowchart TB
-    Client["Browser<br/>source restricted by AllowedClientCidr"]
-    IGW["Internet Gateway<br/>attached to VPC"]
+    Client["Browser<br/>any IPv4 source"]
     Internet["Internet"]
     Yahoo["Yahoo Finance"]
 
-    subgraph AWS["AWS | us-east-1"]
-        subgraph VPC["VPC 10.0.0.0/16"]
-            subgraph Public["Public subnets | 2 AZs"]
-                ALB["Application Load Balancer<br/>HTTP :80"]
-                NAT["One NAT Gateway<br/>outbound only"]
+    subgraph AWS["AWS Region | us-east-1"]
+        subgraph VPC["Nimbus VPC | 10.0.0.0/16"]
+            IGW["Internet Gateway"]
+            ALB["One internet-facing ALB<br/>spans both public subnets<br/>HTTP :80"]
+            RDS["Private RDS Multi-AZ service<br/>stable writer endpoint"]
+
+            subgraph AZ1["Availability Zone 1 | us-east-1a*"]
+                direction TB
+                Pub1["Public subnet 1<br/>NAT Gateway 1 + Elastic IP"]
+                Priv1["Private subnet 1<br/>Nimbus EC2 target"]
+                DBInstance1["RDS DB instance<br/>primary or standby"]
             end
-            subgraph Private["Private subnets | 2 AZs"]
-                subgraph AppASG["Auto Scaling group | min 2, desired 2, max 6"]
-                    EC2A["Nimbus EC2<br/>Streamlit :8501"]
-                    EC2B["Nimbus EC2<br/>Streamlit :8501"]
-                end
-                RDS["Private MySQL RDS<br/>single-AZ"]
+
+            subgraph AZ2["Availability Zone 2 | us-east-1b*"]
+                direction TB
+                Pub2["Public subnet 2<br/>NAT Gateway 2 + Elastic IP"]
+                Priv2["Private subnet 2<br/>Nimbus EC2 target"]
+                DBInstance2["RDS DB instance<br/>standby or primary"]
             end
         end
     end
 
     Client -->|HTTP| ALB
-    ALB -->|healthy targets :8501| EC2A
-    ALB -->|healthy targets :8501| EC2B
-    EC2A -->|MySQL :3306| RDS
-    EC2B -->|MySQL :3306| RDS
-    EC2A --> NAT
-    EC2B --> NAT
-    NAT --> IGW
+    ALB -->|healthy targets :8501| Priv1
+    ALB -->|healthy targets :8501| Priv2
+    Priv1 -->|MySQL :3306| RDS
+    Priv2 -->|MySQL :3306| RDS
+    RDS -. active primary .-> DBInstance1
+    RDS -. active primary after failover .-> DBInstance2
+    DBInstance1 <-->|synchronous replication / automatic failover| DBInstance2
+    Priv1 -->|AZ-local egress| Pub1
+    Priv2 -->|AZ-local egress| Pub2
+    Pub1 --> IGW
+    Pub2 --> IGW
     IGW --> Internet
     Internet --> Yahoo
 
 ```
 
+`*` The diagram labels the two zones as `us-east-1a` and `us-east-1b` to
+match the deployment described here. AWS Availability Zone letter-to-zone
+mapping can differ by account; the template selects the first two available
+zones in `us-east-1`, and the account's console shows their actual names.
+
 The app is organized as a Streamlit entry point (`src/app.py`), feature modules
 under `src/features/`, shared Yahoo Finance access in `src/analysis.py`, and
 MySQL connection/schema management in `src/database.py`. The AWS template
 places an internet-facing Application Load Balancer (ALB) in two public
-subnets. The ALB accepts HTTP only from `AllowedClientCidr` and forwards traffic
-to healthy Nimbus instances on port 8501. An EC2 Auto Scaling group runs the app
-in two private subnets; instances have no public IP and accept app traffic only
-from the ALB security group. CPU target tracking aims for 60% average
-utilization, with a minimum and desired capacity of two and a maximum of six.
-ALB target stickiness helps keep each Streamlit browser session on the same
-instance, but does not preserve a session if that instance is replaced.
-
-The private subnets share one route table whose internet-bound route points to
-a single NAT Gateway in public subnet 1. This lets instances download the
-repository, dependencies, and RDS CA bundle during startup and lets Nimbus
-query Yahoo Finance. The NAT Gateway is a single-AZ dependency: an outage in
-its AZ interrupts outbound internet access for app instances in both AZs. The
-database is private, accepts MySQL only from the app security group, and uses
-TLS with the RDS CA bundle. It remains a single-AZ RDS instance. Secrets
-Manager, database IAM authentication, instance SSH ingress, and HTTPS are not
-configured.
+subnets. The ALB accepts HTTP from any IPv4 address (`0.0.0.0/0`) and forwards
+traffic to healthy Nimbus instances on port 8501. An EC2 Auto Scaling group runs the app
+across two private subnets, with no public IP and app traffic accepted only
+from the ALB security group. The Auto Scaling group has minimum and desired
+capacity two, maximum six, and 60% average CPU target tracking; it can place
+instances in both AZs. Each private subnet has its own route table and
+AZ-local NAT Gateway, so a single NAT/AZ failure does not remove outbound
+access from the other AZ. The private MySQL database uses RDS Multi-AZ with a
+managed standby in another AZ and a stable database endpoint for failover.
+ALB target stickiness helps keep a Streamlit browser session on one instance,
+but does not preserve in-memory session state if that instance is replaced.
+Secrets Manager, database IAM authentication, instance SSH ingress, and HTTPS
+are not configured.
 
 Each browser session selects one of three fixed demo-user IDs. Search history
 and saved notes carry that ID and are filtered by it in database queries. This
@@ -176,29 +186,28 @@ environment.
 | Component | Configuration and role |
 |---|---|
 | VPC | `10.0.0.0/16`, with DNS support and hostnames enabled. |
-| Public subnets | `10.0.0.0/24` and `10.0.2.0/24`, one in each of the first two AZs selected in `us-east-1`. Both use a shared route table with `0.0.0.0/0` routed to the Internet Gateway. |
-| Private subnets | `10.0.1.0/24` and `10.0.3.0/24`, one in each selected AZ. The app Auto Scaling group and RDS subnet group use these subnets. |
-| Application Load Balancer | Internet-facing ALB across both public subnets. Its security group allows HTTP port 80 only from `AllowedClientCidr`. It forwards requests to healthy target instances on port 8501. |
-| App Auto Scaling group | EC2 instances run Nimbus in the private subnets with no public IPv4 addresses. The group uses the latest Amazon Linux 2023 x86_64 AMI, `t2.micro`, and Python 3.11. Desired/minimum capacity is 2, maximum is 6, and target tracking aims for 60% average CPU. |
-| NAT Gateway | One NAT Gateway and Elastic IP in public subnet 1. The shared private route table sends internet-bound app traffic through this NAT; it is used for instance bootstrap and Yahoo Finance access. |
-| MySQL RDS | Private MySQL `db.t3.micro`, database `nimbus`, 20 GB gp3, in a subnet group spanning both private subnets. The DB instance itself is single-AZ. It is not publicly accessible; port 3306 is allowed only from the app security group. |
+| Public subnets | `10.0.0.0/24` and `10.0.2.0/24`, one in each of the first two AZs selected in `us-east-1`. Both route internet traffic through the Internet Gateway. |
+| Private subnets | `10.0.1.0/24` and `10.0.3.0/24`, one in each selected AZ. The Auto Scaling group and Multi-AZ RDS subnet group use both. Each private subnet has its own route table. |
+| Application Load Balancer | Internet-facing ALB across both public subnets. Its security group allows HTTP port 80 from any IPv4 address (`0.0.0.0/0`). It forwards requests to healthy target instances on port 8501. |
+| App Auto Scaling group | EC2 instances run Nimbus in both private subnets with no public IPv4 addresses. The group uses the latest Amazon Linux 2023 x86_64 AMI, `t2.micro`, and Python 3.11. Desired/minimum capacity is 2, maximum is 6, and target tracking aims for 60% average CPU. |
+| NAT Gateways | One NAT Gateway and Elastic IP in each public subnet. Each private subnet routes outbound internet traffic through its same-AZ NAT for bootstrap and Yahoo Finance access. |
+| MySQL RDS | Private MySQL `db.t3.micro`, database `nimbus`, 20 GB gp3, in a subnet group spanning both private subnets. RDS Multi-AZ maintains a synchronous standby in another AZ and manages failover. It is not publicly accessible; port 3306 is allowed only from the app security group. |
 
-Client traffic flows over HTTP from the allowed client CIDR to the ALB, then
-from the ALB to Nimbus on port 8501. App instances connect to RDS over port
-3306 and reach external sites through the NAT Gateway. Security groups allow
-app ingress only from the ALB and database ingress only from the app security
-group. The target group health-checks `/` and uses ALB cookie stickiness to
-help keep a Streamlit browser session on the same instance. Stickiness is not
-shared session storage; sessions can be lost when an instance fails or is
-replaced.
+Client traffic flows over HTTP from any IPv4 address to the ALB, then from
+the ALB to healthy Nimbus targets in either AZ. App instances connect to
+the RDS writer endpoint over port 3306 and reach external sites through their
+AZ-local NAT Gateway. If one AZ fails, the ALB and Auto Scaling group can
+continue serving through the other AZ; RDS performs a managed failover to its
+standby. Existing Streamlit in-memory sessions may be lost if their instance
+fails. Security groups allow app ingress only from the ALB and database ingress
+only from the app security group.
 
-The NAT Gateway is intentionally a single, lower-complexity choice. It incurs
-hourly and data-processing charges and is in one AZ; if that AZ or NAT fails,
-app instances lose outbound internet access. A NAT Gateway per AZ would improve
-egress resilience but would cost more and require separate private route tables.
-Two app instances run continuously at the configured minimum. The ALB, NAT
-Gateway, EC2, RDS, storage, and data transfer can all incur charges. Check AWS
-Budgets, service quotas, and any restrictions in a learner lab before deploying.
+This redundant design costs more than the original sandbox setup: two NAT
+Gateways incur separate hourly and data-processing charges, and RDS Multi-AZ
+incurs standby instance charges. Two app instances also run at the configured
+minimum. The ALB, EC2, RDS, storage, and data transfer can all incur charges.
+Check AWS Budgets, service quotas, and learner-lab restrictions before
+deploying.
 
 ### Deploy or update the stack
 
@@ -208,10 +217,8 @@ Budgets, service quotas, and any restrictions in a learner lab before deploying.
    (standard)**. For a new stack, upload `scripts/nimbus-aws.yaml`. To update an
    existing Nimbus stack, choose **Update** and provide the revised template.
 3. Enter a stack name and set the parameters:
-   - **`AllowedClientCidr`** is required. Use your current public IPv4 address
-     with `/32` (for example, `203.0.113.10/32` is only a documentation
-     example—replace it with your actual address). It restricts access to the
-     ALB; it does not assign an EC2 IP.
+   - There is no client-CIDR parameter. The ALB security group allows HTTP
+     traffic from any IPv4 address (`0.0.0.0/0`).
    - **`GitHubRepoUrl`** defaults to this repository; change it if deploying a
      fork that the instances can access.
    - **`LatestAmiId`** defaults to the public SSM parameter for the latest
@@ -223,21 +230,24 @@ Budgets, service quotas, and any restrictions in a learner lab before deploying.
      a root-only environment file; authorized principals can inspect instance
      user data. Do not treat this as production secrets management.
 4. Review the stack options and acknowledge the resource changes. The template
-   creates an internet-facing ALB, NAT Gateway with an Elastic IP, Auto Scaling
-   resources, and RDS. AWS learner environments may restrict some of these.
+   creates an internet-facing ALB, two NAT Gateways with Elastic IPs, an Auto
+   Scaling group, and Multi-AZ RDS. This costs more than single-AZ resources;
+   AWS learner environments may restrict Multi-AZ RDS or NAT Gateways.
 5. Create/update the stack and wait for `CREATE_COMPLETE` or
    `UPDATE_COMPLETE`. On initial deployment, allow additional time for EC2 user
    data to install packages, clone the repository, and start Nimbus.
 6. Open the **`StreamlitUrl`** output. It is the HTTP address of the ALB; the
    `LoadBalancerDns` output gives its DNS name. The database endpoint and port
-   outputs are private VPC details. The ALB accepts HTTP only from the CIDR
-   supplied at deployment.
+   outputs are private VPC details. The webpage is reachable from any IPv4
+   address.
 
 No EC2 key pair is configured and port 22 is not open: the app instances are
 private and have no direct SSH access. Systems Manager access is also not
 configured. The app has no real user authentication and the ALB uses HTTP, not
-HTTPS, so the CIDR restriction is a network boundary, not a replacement for
-authentication or TLS.
+HTTPS. Anyone on the IPv4 internet can reach the Nimbus webpage, and traffic is
+not encrypted in transit. Do not use this open configuration for sensitive
+data or production workloads; restrict the ALB ingress or add authentication
+and HTTPS before such use.
 
 ### Scaling, operations, and data lifecycle
 
@@ -255,9 +265,10 @@ the instance's cloud-init output and `journalctl -u nimbus`; without SSM or SSH,
 you will need to add a private administration method before connecting to the
 instance to inspect those logs.
 
-RDS remains single-AZ with encryption, automated backups, and deletion
-protection disabled. The CloudFormation deletion and replacement policies
-delete the database. Back up any data you need before deleting the stack.
+RDS is Multi-AZ, but encryption, automated backups, and deletion protection
+remain disabled. Multi-AZ improves availability; it is not a backup. The
+CloudFormation deletion and replacement policies delete the database. Back up
+any data you need before deleting the stack.
 Updating the old single-instance template creates the ALB and Auto Scaling
 resources and removes the standalone public EC2 instance; app sessions on that
 instance will be interrupted, but the existing RDS resource is retained by
