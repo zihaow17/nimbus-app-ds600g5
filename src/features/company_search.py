@@ -577,6 +577,11 @@ def show_company_search_page():
             max-width: 620px;
         }
 
+        .st-key-nimbus-home-logo [data-testid="stImage"] {
+            display: flex;
+            justify-content: center;
+        }
+
         .nimbus-hero-title {
             text-align: center;
             font-size: clamp(1.4rem, 3vw, 2rem);
@@ -605,10 +610,11 @@ def show_company_search_page():
         left, middle, right = st.columns([1, 4, 1])
 
         with middle:
-            st.image(
-                str(WIDE_LOGO_PATH),
-                width=520,
-            )
+            with st.container(key="nimbus-home-logo"):
+                st.image(
+                    WIDE_LOGO_PATH.read_bytes(),
+                    width=520,
+                )
 
     else:
         st.markdown(
