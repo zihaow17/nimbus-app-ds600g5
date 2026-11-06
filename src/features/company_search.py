@@ -1,6 +1,7 @@
 
 """Company Search UI, Yahoo Finance orchestration, and rendering of stored results."""
 
+import base64
 from html import escape
 from pathlib import Path
 
@@ -563,8 +564,17 @@ def show_company_search_page():
         .st-key-company-search-bar input {
             text-transform: uppercase;
         .st-key-nimbus-home-logo [data-testid="stImage"] {
+        .nimbus-home-logo {
             display: flex;
             justify-content: center;
+            width: 100%;
+        }
+
+        .nimbus-home-logo img {
+            display: block;
+            height: auto;
+            max-width: 100%;
+            width: 520px;
         }
 
         .nimbus-hero-title {
@@ -592,14 +602,15 @@ def show_company_search_page():
     # --------------------------------------------------------
 
     if WIDE_LOGO_PATH.exists():
-        left, middle, right = st.columns([1, 4, 1])
-
-        with middle:
-            with st.container(key="nimbus-home-logo"):
-                st.image(
-                    WIDE_LOGO_PATH.read_bytes(),
-                    width=520,
-                )
+        logo_data = base64.b64encode(WIDE_LOGO_PATH.read_bytes()).decode("ascii")
+        st.markdown(
+            f"""
+            <div class="nimbus-home-logo">
+                <img src="data:image/png;base64,{logo_data}" alt="Nimbus logo">
+            </div>
+            """,
+            unsafe_allow_html=True,
+        )
 
     else:
         st.markdown(
