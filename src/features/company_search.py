@@ -563,7 +563,8 @@ def show_company_search_page():
 
         .st-key-company-search-bar input {
             text-transform: uppercase;
-        .st-key-nimbus-home-logo [data-testid="stImage"] {
+        }
+
         .nimbus-home-logo {
             display: flex;
             justify-content: center;
